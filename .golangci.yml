@@ -1,0 +1,38 @@
+run:
+  timeout: 5m
+  # Match the Go version declared in go.mod.
+  go: '1.26'
+
+linters:
+  enable:
+    # Default Go linters (equivalent to the old vet + unused set).
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    # Style and correctness helpers.
+    - gocritic
+    - gofmt
+    - goimports
+    - misspell
+    - revive
+    - unconvert
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+      - name: var-naming
+        severity: warning
+  errcheck:
+    # Report unchecked errors even in type assertions.
+    check-type-assertions: false
+    check-blank: false
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
