@@ -1,7 +1,9 @@
 run:
   timeout: 5m
-  # Match the Go version declared in go.mod.
-  go: '1.26'
+  # golangci-lint v1.64 is built with Go 1.24. Set this to the linter's
+  # runtime version, not the project's module version, to avoid a "lower than
+  # the targeted Go version" error.
+  go: '1.24'
 
 linters:
   enable:
