@@ -1,0 +1,62 @@
+package main
+
+import (
+	"fmt"
+
+	"github.com/oxcafedead/passone/internal/ui"
+)
+
+// App is the request-handling surface bound into the frontend under
+// wailsjs/go/main/App.
+type App struct {
+	gui *ui.GUI
+}
+
+func NewApp(g *ui.GUI) *App { return &App{gui: g} }
+
+// IsUnlocked reports whether decrypted key material is in memory.
+func (a *App) IsUnlocked() bool { return a.gui.IsUnlocked() }
+
+// Unlock validates the stored key passphrases.
+func (a *App) Unlock(pgpPass, sshPass string) error { return a.gui.Unlock(pgpPass, sshPass) }
+
+// Lock drops all decrypted keys from memory.
+func (a *App) Lock() { a.gui.Lock() }
+
+// AppInfo describes the current environment for the unlock screen.
+func (a *App) AppInfo() map[string]string {
+	return map[string]string{
+		"dataDir":   a.gui.DataDir(),
+		"storePath": presence(a.gui.StorePath()),
+		"pgpKey":    presenceBool(a.gui.HasStoredPGPKey()),
+		"sshKey":    presenceBool(a.gui.HasStoredSSHKey()),
+		"autoLock":  autoLockText(a.gui.AutoLockMinutes()),
+	}
+}
+
+func presence(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
+}
+
+func presenceBool(ok bool) string {
+	if ok {
+		return "imported"
+	}
+	return "not imported"
+}
+
+func autoLockText(m int) string {
+	if m <= 0 {
+		return "off"
+	}
+	if m%60 == 0 {
+		return fmt.Sprintf("%d h", m/60)
+	}
+	if m < 60 {
+		return fmt.Sprintf("%d min", m)
+	}
+	return fmt.Sprintf("%dh %dm", m/60, m%60)
+}

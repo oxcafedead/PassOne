@@ -7,6 +7,12 @@
 # Local password store (live pass/gopass data) - NEVER commit these
 /repo/
 
+# GUI (Wails) build artifacts
+/cmd/gui/frontend/node_modules/
+/cmd/gui/frontend/dist/
+/cmd/gui/build/bin/
+/cmd/gui/passone-ui.exe
+
 # Go build/test artifacts
 *.test
 *.out
