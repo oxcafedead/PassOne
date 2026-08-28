@@ -23,6 +23,19 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: cmd/gui/frontend/package.json
+          cache: npm
+          cache-dependency-path: cmd/gui/frontend/package-lock.json
+
+      - name: Build frontend assets
+        working-directory: cmd/gui/frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: Run tests with coverage
         run: go test -coverprofile='coverage.out' ./...
 
