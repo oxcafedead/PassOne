@@ -13,12 +13,12 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/oxcafedead/gopass-desktop/internal/config"
-	"github.com/oxcafedead/gopass-desktop/internal/gitx"
-	"github.com/oxcafedead/gopass-desktop/internal/pgp"
-	"github.com/oxcafedead/gopass-desktop/internal/security"
-	"github.com/oxcafedead/gopass-desktop/internal/sshx"
-	"github.com/oxcafedead/gopass-desktop/internal/store"
+	"github.com/oxcafedead/passone/internal/config"
+	"github.com/oxcafedead/passone/internal/gitx"
+	"github.com/oxcafedead/passone/internal/pgp"
+	"github.com/oxcafedead/passone/internal/security"
+	"github.com/oxcafedead/passone/internal/sshx"
+	"github.com/oxcafedead/passone/internal/store"
 )
 
 // App coordinates the store, OpenPGP, SSH, Git and security subsystems.

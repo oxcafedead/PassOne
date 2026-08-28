@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-const usage = `Gopass Desktop - native Windows pass/gopass client (CLI proof of concept)
+const usage = `PassOne - native Windows pass client (CLI proof of concept)
 
-Usage: gopass-desktop <command> [arguments]
+Usage: passone <command> [arguments]
 
 Store / keys
   init                         Create the application data directory

@@ -36,16 +36,16 @@ func defaultConfig() *Config {
 	return &Config{
 		AutoLockMinutes:       5,
 		ClipboardClearSeconds: 30,
-		GitAuthorName:         "Gopass Desktop",
+		GitAuthorName:         "PassOne",
 	}
 }
 
 // ResolvePaths returns an absolute Paths structure rooted at the application
 // data directory. If LOCALAPPDATA is unset the user home directory is used.
-// The GOPASS_DESKTOP_DIR environment variable overrides the base directory
+// The PASSONE_DIR environment variable overrides the base directory
 // (used by tests and for portable-mode operation).
 func ResolvePaths() Paths {
-	base := os.Getenv("GOPASS_DESKTOP_DIR")
+	base := os.Getenv("PASSONE_DIR")
 	if base != "" {
 		return PathsFromBase(base)
 	}
@@ -57,7 +57,7 @@ func ResolvePaths() Paths {
 		}
 		base = filepath.Join(home, "AppData", "Local")
 	}
-	return PathsFromBase(filepath.Join(base, "GopassDesktop"))
+	return PathsFromBase(filepath.Join(base, "PassOne"))
 }
 
 // PathsFromBase builds a Paths structure from an explicit base directory.

@@ -10,7 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	goGitSSH "github.com/go-git/go-git/v5/plumbing/transport/ssh"
-	"github.com/oxcafedead/gopass-desktop/internal/config"
+	"github.com/oxcafedead/passone/internal/config"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -181,7 +181,7 @@ func Commit(dir, message string, authorName, authorEmail string) (string, error)
 		authorName = "Gopass Desktop"
 	}
 	if authorEmail == "" {
-		authorEmail = "gopass-desktop@localhost"
+		authorEmail = "passone@localhost"
 	}
 	h, err := wt.Commit(message, &goGit.CommitOptions{
 		Author: &object.Signature{

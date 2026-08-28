@@ -12,24 +12,24 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
-	"github.com/oxcafedead/gopass-desktop/internal/store"
+	"github.com/oxcafedead/passone/internal/store"
 )
 
 const testPGPPassphrase = "app-test-pass"
 
 // newTestApp returns an App bound to an isolated data directory; the
-// GOPASS_DESKTOP_DIR env override is restored after the test.
+// PASSONE_DIR env override is restored after the test.
 func newTestApp(t *testing.T) *App {
 	t.Helper()
-	prev, hadPrev := os.LookupEnv("GOPASS_DESKTOP_DIR")
-	if err := os.Setenv("GOPASS_DESKTOP_DIR", t.TempDir()); err != nil {
+	prev, hadPrev := os.LookupEnv("PASSONE_DIR")
+	if err := os.Setenv("PASSONE_DIR", t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		if hadPrev {
-			os.Setenv("GOPASS_DESKTOP_DIR", prev)
+			os.Setenv("PASSONE_DIR", prev)
 		} else {
-			os.Unsetenv("GOPASS_DESKTOP_DIR")
+			os.Unsetenv("PASSONE_DIR")
 		}
 	})
 	a, err := New()

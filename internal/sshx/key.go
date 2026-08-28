@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/oxcafedead/gopass-desktop/internal/security"
+	"github.com/oxcafedead/passone/internal/security"
 	"golang.org/x/crypto/ssh"
 )
 

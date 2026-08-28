@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
-	"github.com/oxcafedead/gopass-desktop/internal/app"
-	"github.com/oxcafedead/gopass-desktop/internal/pgp"
-	"github.com/oxcafedead/gopass-desktop/internal/sshx"
+	"github.com/oxcafedead/passone/internal/app"
+	"github.com/oxcafedead/passone/internal/pgp"
+	"github.com/oxcafedead/passone/internal/sshx"
 	"golang.org/x/term"
 )
 

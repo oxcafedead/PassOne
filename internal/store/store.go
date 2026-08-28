@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/oxcafedead/gopass-desktop/internal/config"
+	"github.com/oxcafedead/passone/internal/config"
 )
 
 // ErrNoGPGID is returned when a directory does not look like a pass store.

@@ -1,4 +1,5 @@
 # Built binaries
+/passone.exe
 /gopass-desktop.exe
 *.exe
 *.exe.manifest

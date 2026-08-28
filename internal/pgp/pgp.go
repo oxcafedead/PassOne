@@ -15,7 +15,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
-	"github.com/oxcafedead/gopass-desktop/internal/security"
+	"github.com/oxcafedead/passone/internal/security"
 )
 
 // KeyInfo is a non-secret description of an OpenPGP key used for display.
@@ -156,7 +156,7 @@ func unlockEntities(entities []*openpgp.Entity, passphrase []byte) error {
 			continue
 		}
 		if err := e.DecryptPrivateKeys(passphrase); err != nil {
-			if os.Getenv("GOPASS_DESKTOP_DEBUG") != "" {
+			if os.Getenv("PASSONE_DEBUG") != "" {
 				return fmt.Errorf("unable to unlock the OpenPGP key (passphrase len=%d): %v", len(passphrase), err)
 			}
 			return fmt.Errorf("unable to unlock the OpenPGP key with the given passphrase")

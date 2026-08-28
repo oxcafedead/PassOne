@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/oxcafedead/gopass-desktop/internal/config"
+	"github.com/oxcafedead/passone/internal/config"
 	"golang.org/x/crypto/ssh"
 )
 

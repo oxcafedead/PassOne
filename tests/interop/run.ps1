@@ -1,4 +1,4 @@
-# GnuPG <-> gopass-desktop interoperability test (development harness).
+# GnuPG <-> PassOne interoperability test (development harness).
 # Requires GnuPG installed (e.g. "winget install GnuPG.GnuPG"). GnuPG is used
 # ONLY to generate test fixtures and to verify our output; the application
 # itself never invokes it.
@@ -12,10 +12,10 @@ param()
 $ErrorActionPreference = "Continue"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$exe  = Join-Path $root "..\..\gopass-desktop.exe"
+$exe  = Join-Path $root "..\..\passone.exe"
 $gpg  = "C:\Program Files (x86)\gnupg\bin\gpg.exe"
 if (-not (Test-Path $gpg)) { $gpg = "C:\Program Files\gnupg\bin\gpg.exe" }
-if (-not (Test-Path $exe)) { throw "build the app first: go build -o gopass-desktop.exe ./cmd/app" }
+if (-not (Test-Path $exe)) { throw "build the app first: go build -o passone.exe ./cmd/app" }
 
 $work  = Join-Path $env:TEMP "gopass-interop-$PID"
 $gnupg = Join-Path $work "gnupg"
@@ -24,7 +24,7 @@ $store = Join-Path $work "store"
 New-Item -ItemType Directory -Force -Path $gnupg, $data, (Join-Path $store "github") | Out-Null
 
 $env:GNUPGHOME = $gnupg
-$env:GOPASS_DESKTOP_DIR = $data
+$env:PASSONE_DIR = $data
 $pass = "interop-pass-8791"
 
 # Run a gpg command programmatically (never opens a GUI pinentry).

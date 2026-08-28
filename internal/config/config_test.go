@@ -45,7 +45,7 @@ func TestManagerSaveLoadRoundtrip(t *testing.T) {
 		PGPKeyFingerprint:     "AABBCCDDEE",
 		AutoLockMinutes:       9,
 		ClipboardClearSeconds: 12,
-		GitAuthorName:         "Gopass Desktop",
+		GitAuthorName:         "PassOne",
 		GitAuthorEmail:        "me@example.com",
 	}
 	if err := m.Save(in); err != nil {

@@ -1,4 +1,4 @@
-module github.com/oxcafedead/gopass-desktop
+module github.com/oxcafedead/passone
 
 go 1.26.7
 

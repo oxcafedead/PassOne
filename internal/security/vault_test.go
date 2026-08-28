@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/oxcafedead/gopass-desktop/internal/config"
+	"github.com/oxcafedead/passone/internal/config"
 )
 
 func TestDPAPIRoundtrip(t *testing.T) {

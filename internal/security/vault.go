@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/oxcafedead/gopass-desktop/internal/config"
+	"github.com/oxcafedead/passone/internal/config"
 )
 
 // Vault seals and opens key material using a random application key that is
