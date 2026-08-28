@@ -23,6 +23,7 @@
   let listing: boolean = false
   let selected: string | null = null
   let detail: string = ''
+  let revealed: boolean = false
   let copying: boolean = false
   let clearSeconds: number = 30
   let copiedName: string | null = null
@@ -58,12 +59,13 @@
     try {
       const keep = selected
       entries = await ListPasswords()
-      if (keep && entries.includes(keep)) {
-        detail = await ShowPassword(keep)
-      } else {
+      if (!keep || !entries.includes(keep)) {
         selected = null
-        detail = ''
       }
+      // A refresh never re-decrypts: the selection stays but the content is
+      // hidden again until the user asks for it explicitly.
+      detail = ''
+      revealed = false
     } catch (e) {
       error = String(e)
     } finally {
@@ -71,20 +73,41 @@
     }
   }
 
+  // select marks an entry as chosen without decrypting it. The content stays
+  // hidden until reveal() is invoked explicitly.
   async function select(name: string): Promise<void> {
     error = ''
     if (selected === name) {
       selected = null
       detail = ''
+      revealed = false
       return
     }
     selected = name
+    detail = ''
+    revealed = false
+  }
+
+  // reveal decrypts only the selected entry and renders it. This is the single
+  // point where plaintext reaches the DOM; hide() drops it again.
+  async function reveal(): Promise<void> {
+    if (!selected) {
+      return
+    }
+    error = ''
     try {
-      detail = await ShowPassword(name)
+      detail = await ShowPassword(selected)
+      revealed = true
     } catch (e) {
       detail = ''
+      revealed = false
       error = String(e)
     }
+  }
+
+  function hide(): void {
+    detail = ''
+    revealed = false
   }
 
   async function copySecret(name: string): Promise<void> {
@@ -124,6 +147,7 @@
     unlocked = false
     selected = null
     detail = ''
+    revealed = false
     copiedName = null
     error = ''
     stopCountdown()
@@ -260,6 +284,14 @@
             <span class="rounded-md bg-emerald-500/15 px-2 py-1 text-xs text-emerald-300">Copied · clears in {copiedRemaining}s</span>
           {/if}
           <button
+            data-testid="reveal"
+            on:click={revealed ? hide : reveal}
+            title={revealed ? 'Drop the clear-text from the page' : 'Decrypt and show this entry'}
+            class="flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-sm font-medium text-gray-300 transition hover:bg-white/10 ring-1 ring-white/10"
+          >
+            {revealed ? 'Hide' : 'Show'}
+          </button>
+          <button
             on:click={() => copySecret(selected)}
             disabled={copying}
             title="Copy the first line to the clipboard"
@@ -274,7 +306,26 @@
         {#if error}
           <p class="text-xs break-words text-red-400">{error}</p>
         {/if}
-        <pre class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-xl bg-white/5 p-4 font-mono text-xs leading-relaxed text-gray-300 ring-1 ring-white/10">{detail}</pre>
+        {#if detail}
+          <pre class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-xl bg-white/5 p-4 font-mono text-xs leading-relaxed text-gray-300 ring-1 ring-white/10">{detail}</pre>
+        {:else}
+          <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-white/10 text-sm text-gray-500">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.58 12.5S5.5 6.5 12 6.5s9.42 6 9.42 6-2.92 6-9.42 6-9.42-6-9.42-6zM15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+            <div class="flex max-w-xs flex-col items-center gap-1 text-center">
+              <span class="text-gray-400">Content is locked.</span>
+              <span>It stays encrypted on disk until you explicitly decrypt it.</span>
+            </div>
+            <button
+              data-testid="reveal-empty"
+              on:click={reveal}
+              class="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-400"
+            >
+              Show password
+            </button>
+          </div>
+        {/if}
       {:else}
         <div class="flex flex-1 items-center justify-center text-sm text-gray-600">Select an entry to view it</div>
       {/if}
