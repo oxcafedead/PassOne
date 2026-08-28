@@ -935,20 +935,20 @@
                   <button
                     on:click={() => toggleDir(row.node.path)}
                     style="padding-left: {8 + row.depth * 14}px"
-                    class="list-item flex w-full items-center gap-1 rounded-lg px-2 py-1.5 text-left text-sm"
+                    class="list-item flex w-full flex-nowrap items-center gap-1 rounded-lg px-2 py-1.5 text-left text-sm"
                   >
-                    <span class="flex w-4 items-center justify-center">
+                    <span class="inline-flex w-4 shrink-0 items-center justify-center">
                       <svg xmlns="http://www.w3.org/2000/svg" class="text-dim h-3 w-3 shrink-0 transition-transform duration-150 {expanded.has(row.node.path) ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
                       </svg>
                     </span>
-                    <span class="flex w-5 items-center justify-center">
+                    <span class="inline-flex w-5 shrink-0 items-center justify-center">
                       <svg xmlns="http://www.w3.org/2000/svg" class="text-faint h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
                       </svg>
                     </span>
-                    <span class="text-sub truncate font-medium">{row.node.name}</span>
-                    <span class="text-dim text-ml ml-auto text-xs">{row.node.count}</span>
+                    <span class="text-sub min-w-0 truncate font-medium">{row.node.name}</span>
+                    <span class="text-dim text-ml ml-auto shrink-0 text-xs">{row.node.count}</span>
                   </button>
                 </li>
               {:else}
@@ -958,16 +958,16 @@
                     title={row.node.path}
                     style="padding-left: {8 + row.depth * 14}px"
                     class={selected === row.node.path
-                      ? 'list-item list-item-active flex w-full items-center gap-1 truncate rounded-lg px-2 py-1.5 text-left text-sm'
-                      : 'list-item flex w-full items-center gap-1 truncate rounded-lg px-2 py-1.5 text-left text-sm'}
+                      ? 'list-item list-item-active flex w-full flex-nowrap items-center gap-1 truncate rounded-lg px-2 py-1.5 text-left text-sm'
+                      : 'list-item flex w-full flex-nowrap items-center gap-1 truncate rounded-lg px-2 py-1.5 text-left text-sm'}
                   >
-                    <span class="flex w-4 items-center justify-center"></span>
-                    <span class="flex w-5 items-center justify-center">
+                    <span class="inline-flex w-4 shrink-0 items-center justify-center"></span>
+                    <span class="inline-flex w-5 shrink-0 items-center justify-center">
                       <svg xmlns="http://www.w3.org/2000/svg" class="icon-dim h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.4a2 2 0 00-.59-1.42L15.4 5.17A2 2 0 0013.98 4.6H7a1 1 0 00-1 1V20a1 1 0 001 1zm8-11h-2a3 3 0 00-3 3h5m-5 4h5"/>
                       </svg>
                     </span>
-                    <span class="truncate font-mono text-xs">{row.node.name}</span>
+                    <span class="min-w-0 truncate font-mono text-xs">{row.node.name}</span>
                   </button>
                 </li>
               {/if}
