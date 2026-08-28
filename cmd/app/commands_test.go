@@ -2,6 +2,19 @@ package main
 
 import "testing"
 
+func TestPositionalKeepsStdinDash(t *testing.T) {
+	got := positional([]string{"test_passone", "-", "--full"})
+	want := []string{"test_passone", "-"}
+	if len(got) != len(want) {
+		t.Fatalf("positional() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("positional() = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestHostportOf(t *testing.T) {
 	cases := map[string]string{
 		"github.com":       "github.com:22",

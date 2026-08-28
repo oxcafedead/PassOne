@@ -91,7 +91,7 @@ func hasFlag(args []string, name string) bool {
 func positional(args []string) []string {
 	var out []string
 	for _, a := range args {
-		if strings.HasPrefix(a, "-") {
+		if strings.HasPrefix(a, "-") && a != "-" {
 			continue
 		}
 		out = append(out, a)
