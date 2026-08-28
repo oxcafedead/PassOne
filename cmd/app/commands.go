@@ -358,10 +358,11 @@ func cmdSync(e *env, _ []string) error {
 	if err := ensureSSHUnlocked(e); err != nil {
 		return err
 	}
-	if err := e.app.Sync(); err != nil {
+	msg, err := e.app.Sync()
+	if err != nil {
 		return err
 	}
-	fmt.Fprintln(e.stdout, "Sync complete.")
+	fmt.Fprintln(e.stdout, msg)
 	return nil
 }
 

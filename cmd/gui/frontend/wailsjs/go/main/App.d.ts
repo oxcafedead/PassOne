@@ -52,7 +52,7 @@ export function Status():Promise<string>;
 
 export function StoredStores():Promise<Array<string>>;
 
-export function Sync():Promise<void>;
+export function Sync():Promise<string>;
 
 export function TrustHost(arg1:string):Promise<void>;
 

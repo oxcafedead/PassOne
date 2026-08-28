@@ -394,8 +394,9 @@ func (g *GUI) SetGitAuthor(name, email string) error {
 // Status returns git status text for the active store.
 func (g *GUI) Status() (string, error) { return g.core.Status() }
 
-// Sync performs fetch → pull → push for the active store.
-func (g *GUI) Sync() error { return g.core.Sync() }
+// Sync performs fetch → pull → push for the active store and returns a
+// human-readable summary.
+func (g *GUI) Sync() (string, error) { return g.core.Sync() }
 
 // KnownHosts lists previously trusted SSH hosts with fingerprints.
 func (g *GUI) KnownHosts() []string { return g.core.KnownHostsList() }

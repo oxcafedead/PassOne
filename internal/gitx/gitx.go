@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	goGit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	goGitSSH "github.com/go-git/go-git/v5/plumbing/transport/ssh"
@@ -99,6 +101,107 @@ func Status(dir string) (string, error) {
 		return "", err
 	}
 	return st.String(), nil
+}
+
+// RepoState is a snapshot of the local git repository useful for UI status
+// panels.
+type RepoState struct {
+	Branch      string
+	RemoteURL   string
+	Head        string
+	LastCommit  string
+	IsClean     bool
+	Ahead       int
+	Behind      int
+	HasRemote   bool
+	IsDiverged  bool
+}
+
+// GetRepoState collects branch, remote, last commit and ahead/behind counts.
+func GetRepoState(dir string) (RepoState, error) {
+	repo, err := Open(dir)
+	if err != nil {
+		return RepoState{}, err
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return RepoState{}, err
+	}
+	st, err := wt.Status()
+	if err != nil {
+		return RepoState{}, err
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		return RepoState{}, err
+	}
+
+	state := RepoState{
+		Branch:    head.Name().Short(),
+		Head:      head.Hash().String()[:7],
+		IsClean:   st.IsClean(),
+		HasRemote: false,
+	}
+
+	if commit, err := repo.CommitObject(head.Hash()); err == nil {
+		state.LastCommit = strings.Split(commit.Message, "\n")[0]
+	}
+
+	remote, err := repo.Remote("origin")
+	if err != nil || len(remote.Config().URLs) == 0 {
+		return state, nil
+	}
+	state.RemoteURL = remote.Config().URLs[0]
+	state.HasRemote = true
+
+	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", state.Branch), true)
+	if err != nil {
+		return state, nil
+	}
+
+	ahead, _ := countCommitsUntil(repo, head.Hash(), remoteRef.Hash())
+	behind, _ := countCommitsUntil(repo, remoteRef.Hash(), head.Hash())
+
+	switch {
+	case ahead == 0 && behind == 0:
+		// in sync
+	case ahead > 0 && behind < 0:
+		state.Ahead = ahead
+	case behind > 0 && ahead < 0:
+		state.Behind = behind
+	default:
+		state.IsDiverged = true
+	}
+	return state, nil
+}
+
+func countCommitsUntil(repo *goGit.Repository, from, to plumbing.Hash) (int, error) {
+	if from == to {
+		return 0, nil
+	}
+	seen := make(map[plumbing.Hash]bool)
+	current := from
+	count := 0
+	for current != to {
+		if seen[current] {
+			return -1, nil
+		}
+		seen[current] = true
+		commit, err := repo.CommitObject(current)
+		if err != nil {
+			return 0, err
+		}
+		if commit.NumParents() == 0 {
+			return -1, nil
+		}
+		current = commit.ParentHashes[0]
+		count++
+		if count > 10000 {
+			return -1, nil
+		}
+	}
+	return count, nil
 }
 
 // Fetch contacts the origin remote and updates refs without merging.

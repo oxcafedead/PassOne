@@ -319,3 +319,66 @@ func TestRemoveAndCommit(t *testing.T) {
 		t.Fatalf("expected clean tree after commit, got status %q err %v", st, err)
 	}
 }
+
+func TestRepoStateAheadBehind(t *testing.T) {
+	name := "repo8"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := GetRepoState(work)
+	if err != nil {
+		t.Fatalf("GetRepoState: %v", err)
+	}
+	if state.Branch == "" {
+		t.Fatal("expected a branch name")
+	}
+	if !state.HasRemote {
+		t.Fatal("expected remote to be present")
+	}
+	if state.Ahead != 0 || state.Behind != 0 {
+		t.Fatalf("expected in sync, got ahead=%d behind=%d", state.Ahead, state.Behind)
+	}
+	if !state.IsClean {
+		t.Fatal("expected clean working tree")
+	}
+
+	if err := writeRel(work, "b.txt", "y"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "b.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(work, "add b", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err = GetRepoState(work)
+	if err != nil {
+		t.Fatalf("GetRepoState after local commit: %v", err)
+	}
+	if state.Ahead != 1 {
+		t.Fatalf("ahead = %d, want 1", state.Ahead)
+	}
+	if state.Behind != 0 {
+		t.Fatalf("behind = %d, want 0", state.Behind)
+	}
+	if !state.IsClean {
+		t.Fatal("expected clean working tree after commit")
+	}
+
+	if err := Push(work, nil); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	state, err = GetRepoState(work)
+	if err != nil {
+		t.Fatalf("GetRepoState after push: %v", err)
+	}
+	if state.Ahead != 0 || state.Behind != 0 {
+		t.Fatalf("expected in sync after push, got ahead=%d behind=%d", state.Ahead, state.Behind)
+	}
+}

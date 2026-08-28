@@ -833,39 +833,75 @@ func (a *App) sshKeyOrNil() *sshx.SSHKey {
 
 // Sync fetches, merges and pushes: fetch → pull/merge → push. Diverged
 // histories are reported as a conflict and never silently overwritten.
-func (a *App) Sync() error {
+// On success it returns a human-readable summary of what happened.
+func (a *App) Sync() (string, error) {
 	if err := a.requireUnlocked(); err != nil {
-		return err
+		return "", err
 	}
 	if err := a.ensureStoreOpen(); err != nil {
-		return err
+		return "", err
 	}
 	st := a.storePath()
 	if st == nil {
-		return errors.New("no password store open")
+		return "", errors.New("no password store open")
 	}
 	if a.sshKeyOrNil() == nil {
-		return errors.New("SSH key is not loaded; import an SSH private key or unlock first")
+		return "", errors.New("SSH key is not loaded; import an SSH private key or unlock first")
+	}
+	if !isGitRepo(st.Root()) {
+		return "", errors.New("the store is not a git repository")
 	}
 	auth := a.sshAuth()
 	root := st.Root()
 
+	fetched := false
 	fetchErr := gitx.Fetch(root, auth)
-	if fetchErr != nil && !errors.Is(fetchErr, gitx.ErrUpToDate) {
-		return fetchErr
+	if fetchErr != nil {
+		if !errors.Is(fetchErr, gitx.ErrUpToDate) {
+			return "", fetchErr
+		}
+	} else {
+		fetched = true
 	}
+
+	pulled := false
 	pullErr := gitx.Pull(root, auth)
-	if pullErr != nil && !errors.Is(pullErr, gitx.ErrUpToDate) {
-		return pullErr
+	if pullErr != nil {
+		if !errors.Is(pullErr, gitx.ErrUpToDate) {
+			return "", pullErr
+		}
+	} else {
+		pulled = true
 	}
+
+	pushed := false
 	pushErr := gitx.Push(root, auth)
-	if pushErr != nil && !errors.Is(pushErr, gitx.ErrUpToDate) {
-		return pushErr
+	if pushErr != nil {
+		if !errors.Is(pushErr, gitx.ErrUpToDate) {
+			return "", pushErr
+		}
+	} else {
+		pushed = true
 	}
-	return nil
+
+	if !fetched && !pulled && !pushed {
+		return "Already up to date with origin.", nil
+	}
+
+	parts := make([]string, 0, 3)
+	if fetched {
+		parts = append(parts, "fetched remote updates")
+	}
+	if pulled {
+		parts = append(parts, "pulled updates")
+	}
+	if pushed {
+		parts = append(parts, "pushed local commits")
+	}
+	return "Synced: " + strings.Join(parts, ", ") + ".", nil
 }
 
-// Status returns git status text for the store.
+// Status returns a human-readable summary of the repository state.
 func (a *App) Status() (string, error) {
 	if err := a.ensureStoreOpen(); err != nil {
 		return "", err
@@ -874,7 +910,46 @@ func (a *App) Status() (string, error) {
 	if st == nil {
 		return "", errors.New("no password store open")
 	}
-	return gitx.Status(st.Root())
+	if !isGitRepo(st.Root()) {
+		return "Store is not a git repository.", nil
+	}
+	state, err := gitx.GetRepoState(st.Root())
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "On branch %s\n", state.Branch)
+	if state.HasRemote {
+		fmt.Fprintf(&b, "Remote: %s\n", state.RemoteURL)
+	} else {
+		fmt.Fprintln(&b, "No remote configured.")
+	}
+	if state.Head != "" {
+		fmt.Fprintf(&b, "Last commit: %s — %s\n", state.Head, state.LastCommit)
+	}
+	if state.IsClean {
+		fmt.Fprintln(&b, "Working tree: clean")
+	} else {
+		fmt.Fprintln(&b, "Working tree: has uncommitted changes")
+	}
+	if state.HasRemote {
+		if state.IsDiverged {
+			fmt.Fprintln(&b, "Local and remote histories have diverged.")
+		} else if state.Ahead == 0 && state.Behind == 0 {
+			fmt.Fprintln(&b, "In sync with origin.")
+		} else {
+			parts := make([]string, 0, 2)
+			if state.Ahead > 0 {
+				parts = append(parts, fmt.Sprintf("%d commit(s) ahead", state.Ahead))
+			}
+			if state.Behind > 0 {
+				parts = append(parts, fmt.Sprintf("%d commit(s) behind", state.Behind))
+			}
+			fmt.Fprintf(&b, "%s origin.\n", strings.Join(parts, ", "))
+		}
+	}
+	return b.String(), nil
 }
 
 // PGPKeyNeedsPassphrase reports whether the stored PGP key is passphrase-protected.

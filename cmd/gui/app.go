@@ -112,8 +112,9 @@ func (a *App) SetGitAuthor(name, email string) error { return a.gui.SetGitAuthor
 // Status returns git status text for the active store.
 func (a *App) Status() (string, error) { return a.gui.Status() }
 
-// Sync performs fetch → pull → push for the active store.
-func (a *App) Sync() error { return a.gui.Sync() }
+// Sync performs fetch → pull → push for the active store and returns a
+// human-readable summary.
+func (a *App) Sync() (string, error) { return a.gui.Sync() }
 
 // KnownHosts lists trusted SSH hosts.
 func (a *App) KnownHosts() []string { return a.gui.KnownHosts() }

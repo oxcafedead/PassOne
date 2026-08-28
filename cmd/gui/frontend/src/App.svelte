@@ -636,11 +636,11 @@
     gitBusy = true
     setupErr = ''
     try {
-      await Sync()
+      const msg = await Sync()
       flash('Sync complete')
-      gitText = await Status()
+      const st = await Status()
+      gitText = msg + '\n\n' + st
       await loadSettings()
-      await refresh()
     } catch (e) {
       setupErr = String(e)
     } finally {
