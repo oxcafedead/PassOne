@@ -649,6 +649,9 @@ func (a *App) Sync() error {
 
 // Status returns git status text for the store.
 func (a *App) Status() (string, error) {
+	if err := a.ensureStoreOpen(); err != nil {
+		return "", err
+	}
 	st := a.storePath()
 	if st == nil {
 		return "", errors.New("no password store open")
