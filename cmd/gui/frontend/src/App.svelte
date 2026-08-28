@@ -935,7 +935,7 @@
                   <button
                     on:click={() => toggleDir(row.node.path)}
                     style="padding-left: {8 + row.depth * 14}px; grid-template-columns: 16px 20px 1fr auto;"
-                    class="list-item grid w-full items-center gap-1 rounded-lg px-2 py-1.5 text-left text-sm"
+                    class="list-item grid w-full min-w-0 items-center gap-1 overflow-hidden rounded-lg px-2 py-1.5 text-left text-sm"
                   >
                     <span class="inline-flex items-center justify-center">
                       <svg xmlns="http://www.w3.org/2000/svg" class="text-dim h-3 w-3 shrink-0 transition-transform duration-150 {expanded.has(row.node.path) ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -958,8 +958,8 @@
                     title={row.node.path}
                     style="padding-left: {8 + row.depth * 14}px; grid-template-columns: 16px 20px 1fr;"
                     class={selected === row.node.path
-                      ? 'list-item list-item-active grid w-full items-center gap-1 truncate rounded-lg px-2 py-1.5 text-left text-sm'
-                      : 'list-item grid w-full items-center gap-1 truncate rounded-lg px-2 py-1.5 text-left text-sm'}
+                      ? 'list-item list-item-active grid w-full min-w-0 items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm'
+                      : 'list-item grid w-full min-w-0 items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm'}
                   >
                     <span class="inline-flex items-center justify-center"></span>
                     <span class="inline-flex items-center justify-center">
