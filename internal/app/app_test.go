@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -195,5 +196,50 @@ func TestConfigPersistsStorePath(t *testing.T) {
 	}
 	if a.Config().StorePath == "" {
 		t.Fatal("expected a saved StorePath")
+	}
+}
+
+func TestLockUnlockEventHooks(t *testing.T) {
+	a := newTestApp(t)
+	lockEvents := make(chan struct{}, 4)
+	unlockEvents := make(chan struct{}, 4)
+	a.OnLock(func() { lockEvents <- struct{}{} })
+	a.OnUnlock(func() { unlockEvents <- struct{}{} })
+
+	if err := a.Unlock(nil, nil); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	select {
+	case <-unlockEvents:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an unlock event after Unlock")
+	}
+
+	a.Lock()
+	select {
+	case <-lockEvents:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a lock event after Lock")
+	}
+
+	// The lazy idle lock inside a failing operation must also fire the hook.
+	if err := a.Unlock(nil, nil); err != nil {
+		t.Fatalf("second Unlock: %v", err)
+	}
+	select {
+	case <-unlockEvents:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an unlock event after second Unlock")
+	}
+	a.mu.Lock()
+	a.lastActivity = time.Now().Add(-6 * time.Minute)
+	a.mu.Unlock()
+	if _, err := a.ShowPassword("unused"); err == nil {
+		t.Fatal("expected ShowPassword to fail after idle expiry")
+	}
+	select {
+	case <-lockEvents:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a lock event after idle expiry")
 	}
 }

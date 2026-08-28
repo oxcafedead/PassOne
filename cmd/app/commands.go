@@ -6,10 +6,9 @@ import (
 	"os"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/oxcafedead/passone/internal/app"
+	"github.com/oxcafedead/passone/internal/cliputil"
 	"github.com/oxcafedead/passone/internal/pgp"
 	"github.com/oxcafedead/passone/internal/sshx"
 	"golang.org/x/term"
@@ -246,27 +245,13 @@ func cmdCopy(e *env, args []string) error {
 	if i := strings.IndexByte(text, '\n'); i >= 0 {
 		text = text[:i]
 	}
-	if err := clipboard.WriteAll(text); err != nil {
-		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
-	}
 	cfg := e.app.Config()
 	clearSeconds := cfg.ClipboardClearSeconds
-	fmt.Fprintf(e.stdout, "Password copied to clipboard for %d seconds.\n", clearSeconds)
-	scheduleClipboardClear(text, clearSeconds)
-	return nil
-}
-
-func scheduleClipboardClear(sentinel string, clearSeconds int) {
-	if clearSeconds <= 0 {
-		return
+	if err := cliputil.Copied(text, clearSeconds); err != nil {
+		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
 	}
-	go func() {
-		time.Sleep(time.Duration(clearSeconds) * time.Second)
-		cur, err := clipboard.ReadAll()
-		if err == nil && cur == sentinel {
-			_ = clipboard.WriteAll("")
-		}
-	}()
+	fmt.Fprintf(e.stdout, "Password copied to clipboard for %d seconds.\n", clearSeconds)
+	return nil
 }
 
 func cmdSave(e *env, args []string) error {

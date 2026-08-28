@@ -68,6 +68,7 @@ func main() {
 		},
 		OnStartup: func(ctx context.Context) {
 			setAppContext(ctx)
+			gui.SetContext(ctx)
 		},
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
 			// The tray owns the process lifetime. Closing the window hides

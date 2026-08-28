@@ -34,6 +34,18 @@ func (a *App) AppInfo() map[string]string {
 	}
 }
 
+// ListPasswords returns all password paths in the store.
+func (a *App) ListPasswords() ([]string, error) { return a.gui.ListPasswords() }
+
+// ShowPassword decrypts and returns an entry's full plaintext.
+func (a *App) ShowPassword(name string) (string, error) { return a.gui.ShowPassword(name) }
+
+// CopyPassword copies the first line of an entry to the clipboard.
+func (a *App) CopyPassword(name string) error { return a.gui.CopyPassword(name) }
+
+// ClipboardClearSeconds returns how long copied secrets stay on the clipboard.
+func (a *App) ClipboardClearSeconds() int { return a.gui.ClipboardClearSeconds() }
+
 func presence(s string) string {
 	if s == "" {
 		return "(none)"

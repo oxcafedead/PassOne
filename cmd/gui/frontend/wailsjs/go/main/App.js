@@ -6,12 +6,28 @@ export function AppInfo() {
   return window['go']['main']['App']['AppInfo']();
 }
 
+export function ClipboardClearSeconds() {
+  return window['go']['main']['App']['ClipboardClearSeconds']();
+}
+
+export function CopyPassword(arg1) {
+  return window['go']['main']['App']['CopyPassword'](arg1);
+}
+
 export function IsUnlocked() {
   return window['go']['main']['App']['IsUnlocked']();
 }
 
+export function ListPasswords() {
+  return window['go']['main']['App']['ListPasswords']();
+}
+
 export function Lock() {
   return window['go']['main']['App']['Lock']();
+}
+
+export function ShowPassword(arg1) {
+  return window['go']['main']['App']['ShowPassword'](arg1);
 }
 
 export function Unlock(arg1, arg2) {

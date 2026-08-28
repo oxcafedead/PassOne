@@ -36,6 +36,9 @@ type App struct {
 
 	lastActivity time.Time
 	stopTimer    chan struct{}
+
+	lockHandlers   []func()
+	unlockHandlers []func()
 }
 
 // ErrLocked is returned when an operation needs unlocked key material.
@@ -136,6 +139,7 @@ func (a *App) ImportPGPKey(block, passphrase []byte) ([]*pgp.KeyInfo, error) {
 		return nil, err
 	}
 	a.startAutoLock()
+	a.notifyUnlocked()
 	return infos, nil
 }
 
@@ -159,6 +163,7 @@ func (a *App) ImportSSHKey(pem, passphrase []byte) (*sshx.SSHKey, error) {
 		return nil, err
 	}
 	a.startAutoLock()
+	a.notifyUnlocked()
 	return k, nil
 }
 
@@ -181,6 +186,7 @@ func (a *App) Unlock(pgpPass, sshPass []byte) error {
 	a.finalizeUnlockLocked()
 	a.mu.Unlock()
 	a.startAutoLock()
+	a.notifyUnlocked()
 	return nil
 }
 
@@ -199,6 +205,7 @@ func (a *App) UnlockPGP(pgpPass []byte) error {
 	a.finalizeUnlockLocked()
 	a.mu.Unlock()
 	a.startAutoLock()
+	a.notifyUnlocked()
 	return nil
 }
 
@@ -212,6 +219,7 @@ func (a *App) UnlockSSH(sshPass []byte) error {
 	a.finalizeUnlockLocked()
 	a.mu.Unlock()
 	a.startAutoLock()
+	a.notifyUnlocked()
 	return nil
 }
 
@@ -280,12 +288,55 @@ func (a *App) HasSSHKeyLoaded() bool {
 // memory (best effort).
 func (a *App) Lock() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.stopTimer != nil {
 		close(a.stopTimer)
 		a.stopTimer = nil
 	}
 	a.lockLocked()
+	a.mu.Unlock()
+	a.notifyLocked()
+}
+
+// OnLock registers fn to be invoked every time the app transitions to the
+// locked state, either through Lock or the idle auto-lock (including the lazy
+// lock performed at the start of an operation on an expired session). Handlers
+// run on their own goroutines and must not call back into Lock.
+func (a *App) OnLock(fn func()) {
+	a.mu.Lock()
+	a.lockHandlers = append(a.lockHandlers, fn)
+	a.mu.Unlock()
+}
+
+// OnUnlock registers fn to be invoked whenever a session becomes unlocked.
+// See OnLock for handler semantics.
+func (a *App) OnUnlock(fn func()) {
+	a.mu.Lock()
+	a.unlockHandlers = append(a.unlockHandlers, fn)
+	a.mu.Unlock()
+}
+
+// notifyLocked runs the registered lock handlers. Must be called without
+// holding a.mu.
+func (a *App) notifyLocked() {
+	a.mu.Lock()
+	hs := make([]func(), len(a.lockHandlers))
+	copy(hs, a.lockHandlers)
+	a.mu.Unlock()
+	for _, h := range hs {
+		go h()
+	}
+}
+
+// notifyUnlocked runs the registered unlock handlers. Must be called without
+// holding a.mu.
+func (a *App) notifyUnlocked() {
+	a.mu.Lock()
+	hs := make([]func(), len(a.unlockHandlers))
+	copy(hs, a.unlockHandlers)
+	a.mu.Unlock()
+	for _, h := range hs {
+		go h()
+	}
 }
 
 func (a *App) lockLocked() {
@@ -305,16 +356,22 @@ func (a *App) touchLocked() {
 // requireUnlocked checks the lock state, enforcing the idle timeout.
 func (a *App) requireUnlocked() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if !a.unlocked {
+		a.mu.Unlock()
 		return ErrLocked
 	}
 	timeout := time.Duration(a.cfg.AutoLockMinutes) * time.Minute
+	idleLocked := false
 	if timeout > 0 && time.Since(a.lastActivity) > timeout {
 		a.lockLocked()
-		return ErrLocked
+		idleLocked = true
 	}
 	a.touchLocked()
+	a.mu.Unlock()
+	if idleLocked {
+		a.notifyLocked()
+		return ErrLocked
+	}
 	return nil
 }
 
