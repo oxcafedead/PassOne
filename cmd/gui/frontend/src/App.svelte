@@ -261,6 +261,8 @@
       entries = await ListPasswords()
       if (!keep || !entries.includes(keep)) {
         selected = null
+        detail = ''
+        revealed = false
       }
       tree = buildTree(entries)
       if (!expandedInitialized) {
@@ -268,14 +270,30 @@
         expandedInitialized = true
       }
       rows = buildRows(tree, expanded)
-      // A refresh never re-decrypts: the selection stays but the content is
-      // hidden again until the user asks for it explicitly.
-      detail = ''
-      revealed = false
+      // If the selected entry still exists, preserve both the selection and
+      // the decrypted detail so the user isn't kicked out of the entry they
+      // were viewing.
     } catch (e) {
       error = String(e)
     } finally {
       listing = false
+    }
+  }
+
+  async function syncAndRefresh(): Promise<void> {
+    gitBusy = true
+    error = ''
+    try {
+      const msg = await Sync()
+      flash(msg)
+      // Remote changes may have altered the selected entry; hide stale content.
+      detail = ''
+      revealed = false
+      await refresh()
+    } catch (e) {
+      error = String(e)
+    } finally {
+      gitBusy = false
     }
   }
 
@@ -838,9 +856,10 @@
     </button>
   </main>
 {:else}
-  <main class="app-bg flex h-full min-h-0 w-full text-main">
-    <aside class="flex w-72 shrink-0 flex-col gap-2 border-r border-panel p-3">
-      <div class="flex items-center gap-2">
+  <main class="app-bg relative flex h-full min-h-0 w-full text-main">
+    <div class="flex h-full w-full" class:pointer-events-none={gitBusy} class:opacity-60={gitBusy}>
+      <aside class="flex w-72 shrink-0 flex-col gap-2 border-r border-panel p-3">
+        <div class="flex items-center gap-2">
         <input
           bind:value={query}
           placeholder="Search…"
@@ -853,6 +872,16 @@
         >
           <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+          </svg>
+        </button>
+        <button
+          on:click={syncAndRefresh}
+          disabled={gitBusy}
+          title="Sync with remote (pull + push)"
+          class="btn-ghost rounded-lg px-2.5 py-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
           </svg>
         </button>
         <button
@@ -906,14 +935,18 @@
                   <button
                     on:click={() => toggleDir(row.node.path)}
                     style="padding-left: {8 + row.depth * 14}px"
-                    class="list-item flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm"
+                    class="list-item flex w-full items-center gap-1 rounded-lg px-2 py-1.5 text-left text-sm"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" class="text-dim h-3 w-3 shrink-0 transition-transform duration-150 {expanded.has(row.node.path) ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
-                    </svg>
-                    <svg xmlns="http://www.w3.org/2000/svg" class="text-faint h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
-                    </svg>
+                    <span class="flex w-4 items-center justify-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="text-dim h-3 w-3 shrink-0 transition-transform duration-150 {expanded.has(row.node.path) ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                      </svg>
+                    </span>
+                    <span class="flex w-5 items-center justify-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="text-faint h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
+                      </svg>
+                    </span>
                     <span class="text-sub truncate font-medium">{row.node.name}</span>
                     <span class="text-dim text-ml ml-auto text-xs">{row.node.count}</span>
                   </button>
@@ -923,14 +956,17 @@
                   <button
                     on:click={() => select(row.node.path)}
                     title={row.node.path}
-                    style="padding-left: {8 + (row.depth + 1) * 14}px"
+                    style="padding-left: {8 + row.depth * 14}px"
                     class={selected === row.node.path
-                      ? 'list-item list-item-active flex w-full items-center gap-2 truncate rounded-lg px-2 py-2 text-left text-sm'
-                      : 'list-item flex w-full items-center gap-2 truncate rounded-lg px-2 py-2 text-left text-sm'}
+                      ? 'list-item list-item-active flex w-full items-center gap-1 truncate rounded-lg px-2 py-1.5 text-left text-sm'
+                      : 'list-item flex w-full items-center gap-1 truncate rounded-lg px-2 py-1.5 text-left text-sm'}
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" class="icon-dim h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.4a2 2 0 00-.59-1.42L15.4 5.17A2 2 0 0013.98 4.6H7a1 1 0 00-1 1V20a1 1 0 001 1zm8-11h-2a3 3 0 00-3 3h5m-5 4h5"/>
-                    </svg>
+                    <span class="flex w-4 items-center justify-center"></span>
+                    <span class="flex w-5 items-center justify-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="icon-dim h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.4a2 2 0 00-.59-1.42L15.4 5.17A2 2 0 0013.98 4.6H7a1 1 0 00-1 1V20a1 1 0 001 1zm8-11h-2a3 3 0 00-3 3h5m-5 4h5"/>
+                      </svg>
+                    </span>
                     <span class="truncate font-mono text-xs">{row.node.name}</span>
                   </button>
                 </li>
@@ -1030,6 +1066,17 @@
         <div class="text-dim flex flex-1 items-center justify-center text-sm">Select an entry to view it</div>
       {/if}
     </section>
+    </div>
+    {#if gitBusy}
+      <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/10">
+        <div class="panel ring-panel flex items-center gap-2 rounded-lg px-4 py-2 text-sm shadow-lg">
+          <svg xmlns="http://www.w3.org/2000/svg" class="text-accent h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4.7 8.6a8 8 0 0115.4-1M19.3 15.4a8 8 0 01-15.4 1"/>
+          </svg>
+          Syncing…
+        </div>
+      </div>
+    {/if}
   </main>
 
   {#if editing}
