@@ -153,7 +153,7 @@ func cmdTestSSH(e *env, args []string) error {
 		return fmt.Errorf("test-ssh requires a host argument (e.g. github.com)")
 	}
 	hostport := hostportOf(pos[0])
-	if err := ensureUnlocked(e); err != nil {
+	if err := ensureSSHUnlocked(e); err != nil {
 		return err
 	}
 	if err := ensureHostTrusted(e, sshx.NormalizeHost(hostport)); err != nil {
@@ -351,7 +351,7 @@ func cmdStatus(e *env, _ []string) error {
 }
 
 func cmdSync(e *env, _ []string) error {
-	if err := ensureUnlocked(e); err != nil {
+	if err := ensureSSHUnlocked(e); err != nil {
 		return err
 	}
 	if err := e.app.Sync(); err != nil {

@@ -619,6 +619,9 @@ func (a *App) Sync() error {
 	if err := a.requireUnlocked(); err != nil {
 		return err
 	}
+	if err := a.ensureStoreOpen(); err != nil {
+		return err
+	}
 	st := a.storePath()
 	if st == nil {
 		return errors.New("no password store open")
