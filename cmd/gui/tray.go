@@ -38,6 +38,9 @@ func trayReady() {
 					appBinding.Lock()
 				}
 			case <-quitItem.ClickedCh:
+				if ctx := globalCtx(); ctx != nil {
+					runtime.Quit(ctx)
+				}
 				systray.Quit()
 				return
 			}

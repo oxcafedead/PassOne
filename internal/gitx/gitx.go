@@ -167,6 +167,24 @@ func Add(dir string, paths ...string) error {
 	return nil
 }
 
+// Remove stages the removal of one or more paths in the worktree.
+func Remove(dir string, paths ...string) error {
+	repo, err := Open(dir)
+	if err != nil {
+		return err
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return err
+	}
+	for _, p := range paths {
+		if _, err := wt.Remove(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Commit commits staged changes with the given message.
 func Commit(dir, message string, authorName, authorEmail string) (string, error) {
 	repo, err := Open(dir)

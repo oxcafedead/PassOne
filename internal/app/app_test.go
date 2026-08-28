@@ -13,6 +13,8 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
+	goGit "github.com/go-git/go-git/v5"
+	"github.com/oxcafedead/passone/internal/gitx"
 	"github.com/oxcafedead/passone/internal/store"
 )
 
@@ -88,8 +90,8 @@ func TestImportUnlockDecryptFlow(t *testing.T) {
 	if len(infos) == 0 || infos[0].Fingerprint != fp {
 		t.Fatalf("infos = %+v", infos)
 	}
-	if !a.IsUnlocked() {
-		t.Fatal("expected to be unlocked after import")
+	if a.IsUnlocked() {
+		t.Fatal("expected the app to stay locked after import; unlocking must be explicit")
 	}
 
 	// Set up a local pass store and open it.
@@ -101,6 +103,11 @@ func TestImportUnlockDecryptFlow(t *testing.T) {
 	_ = st
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
+	}
+
+	// A session unlock with the OpenPGP passphrase makes the store usable.
+	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+		t.Fatalf("Unlock: %v", err)
 	}
 
 	// Save, list, show.
@@ -244,6 +251,42 @@ func TestLockUnlockEventHooks(t *testing.T) {
 	}
 }
 
+func TestConfigGettersAndSetters(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.SetAutoLock(7); err != nil {
+		t.Fatalf("SetAutoLock: %v", err)
+	}
+	if got := a.Config().AutoLockMinutes; got != 7 {
+		t.Fatalf("AutoLockMinutes = %d", got)
+	}
+	if err := a.SetAutoLock(-1); err == nil {
+		t.Fatal("expected a negative auto-lock to fail")
+	}
+	if err := a.SetClipboardClear(45); err != nil {
+		t.Fatalf("SetClipboardClear: %v", err)
+	}
+	if got := a.Config().ClipboardClearSeconds; got != 45 {
+		t.Fatalf("ClipboardClearSeconds = %d", got)
+	}
+	if err := a.SetClipboardClear(0); err == nil {
+		t.Fatal("expected a zero clipboard clear to fail")
+	}
+	if err := a.SetGitAuthor("Bob", "bob@example.com"); err != nil {
+		t.Fatalf("SetGitAuthor: %v", err)
+	}
+	cfg := a.Config()
+	if cfg.GitAuthorName != "Bob" || cfg.GitAuthorEmail != "bob@example.com" {
+		t.Fatalf("git author = %+v", cfg)
+	}
+	hp, err := a.CloneHostport("git@github.com:user/pass.git")
+	if err != nil {
+		t.Fatalf("CloneHostport: %v", err)
+	}
+	if hp != "github.com:22" {
+		t.Fatalf("CloneHostport = %q", hp)
+	}
+}
+
 func TestSetPasswordCreateEditRemove(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)
@@ -261,6 +304,12 @@ func TestSetPasswordCreateEditRemove(t *testing.T) {
 	}
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
+	}
+
+	// A session unlock with the OpenPGP passphrase is required before any
+	// password operation, even right after an import.
+	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+		t.Fatalf("Unlock: %v", err)
 	}
 
 	// Creating a brand-new entry with keepOld must fail.
@@ -325,5 +374,75 @@ func TestSetPasswordCreateEditRemove(t *testing.T) {
 	}
 	if err := a.RemovePassword("work/jira"); err == nil {
 		t.Fatal("expected a second remove to fail")
+	}
+}
+
+func TestAutoCommitOnSaveAndRemove(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatalf("ReadArmoredKeyRing: %v", err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	// Initialize git repo in the store directory.
+	if _, err := goGit.PlainInit(storeDir, false); err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	if err := gitx.Add(storeDir, ".gpg-id"); err != nil {
+		t.Fatalf("gitx.Add: %v", err)
+	}
+	if _, err := gitx.Commit(storeDir, "init store", "Tester", "t@example.com"); err != nil {
+		t.Fatalf("gitx.Commit: %v", err)
+	}
+
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
+	// 1. Create a password -> should auto-commit.
+	if err := a.SetPassword("personal/email", []byte("secret123\nnotes\n"), false); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	st, err := gitx.Status(storeDir)
+	if err != nil {
+		t.Fatalf("gitx.Status: %v", err)
+	}
+	if strings.TrimSpace(st) != "" {
+		t.Fatalf("expected clean working tree after SetPassword, got:\n%s", st)
+	}
+
+	// 2. Edit the password -> should auto-commit.
+	if err := a.SetPassword("personal/email", []byte("newpass456\n"), false); err != nil {
+		t.Fatalf("SetPassword edit: %v", err)
+	}
+	st, err = gitx.Status(storeDir)
+	if err != nil {
+		t.Fatalf("gitx.Status: %v", err)
+	}
+	if strings.TrimSpace(st) != "" {
+		t.Fatalf("expected clean working tree after edit, got:\n%s", st)
+	}
+
+	// 3. Remove the password -> should auto-commit.
+	if err := a.RemovePassword("personal/email"); err != nil {
+		t.Fatalf("RemovePassword: %v", err)
+	}
+	st, err = gitx.Status(storeDir)
+	if err != nil {
+		t.Fatalf("gitx.Status: %v", err)
+	}
+	if strings.TrimSpace(st) != "" {
+		t.Fatalf("expected clean working tree after RemovePassword, got:\n%s", st)
 	}
 }

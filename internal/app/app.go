@@ -119,9 +119,35 @@ func (a *App) SSHKeyID() string {
 	return a.cfg.SSHKeyID
 }
 
+// StorePath returns the currently configured store directory.
+func (a *App) StorePath() string {
+	return a.cfg.StorePath
+}
+
+// StoredStores lists local pass stores found under the app stores directory,
+// e.g. repositories that were cloned once but never recorded in the config.
+func (a *App) StoredStores() []string {
+	entries, err := os.ReadDir(a.paths.StoresDir)
+	if err != nil {
+		return []string{}
+	}
+	out := []string{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(a.paths.StoresDir, e.Name())
+		if _, err := store.Open(dir); err == nil {
+			out = append(out, dir)
+		}
+	}
+	return out
+}
+
 // ImportPGPKey imports an armored secret OpenPGP key. The passphrase is
 // validated; only the original (still passphrase-protected) armored block is
-// stored locally, sealed by the vault.
+// stored locally, sealed by the vault. Importing does not start an unlocked
+// session: local secrets stay gated on an explicit Unlock.
 func (a *App) ImportPGPKey(block, passphrase []byte) ([]*pgp.KeyInfo, error) {
 	infos, err := a.pgpSvc.ImportSecret(block, passphrase)
 	if err != nil {
@@ -132,19 +158,17 @@ func (a *App) ImportPGPKey(block, passphrase []byte) ([]*pgp.KeyInfo, error) {
 	}
 	a.mu.Lock()
 	a.cfg.PGPKeyFingerprint = infos[0].Fingerprint
-	a.unlocked = true
-	a.touchLocked()
 	a.mu.Unlock()
 	if err := a.saveConfig(); err != nil {
 		return nil, err
 	}
-	a.startAutoLock()
-	a.notifyUnlocked()
 	return infos, nil
 }
 
 // ImportSSHKey imports an OpenSSH private key. The original file bytes (still
 // encrypted with their passphrase) are stored locally, sealed by the vault.
+// The decrypted signer is kept in memory so transport operations (clone) work
+// without a full session unlock, but the session itself stays locked.
 func (a *App) ImportSSHKey(pem, passphrase []byte) (*sshx.SSHKey, error) {
 	k, err := sshx.ImportPrivateKey(pem, passphrase)
 	if err != nil {
@@ -156,14 +180,10 @@ func (a *App) ImportSSHKey(pem, passphrase []byte) (*sshx.SSHKey, error) {
 	a.mu.Lock()
 	a.sshKey = k
 	a.cfg.SSHKeyID = k.Fingerprint()
-	a.unlocked = true
-	a.touchLocked()
 	a.mu.Unlock()
 	if err := a.saveConfig(); err != nil {
 		return nil, err
 	}
-	a.startAutoLock()
-	a.notifyUnlocked()
 	return k, nil
 }
 
@@ -221,6 +241,18 @@ func (a *App) UnlockSSH(sshPass []byte) error {
 	a.startAutoLock()
 	a.notifyUnlocked()
 	return nil
+}
+
+// LoadStoredSSHKey decrypts the stored SSH key into memory for transport
+// operations (clone, sync) without starting an unlocked session. The session
+// stays locked until an explicit Unlock.
+func (a *App) LoadStoredSSHKey(passphrase []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.HasStoredSSHKey() {
+		return errors.New("no SSH key is stored; import one first")
+	}
+	return a.unlockSSHLocked(passphrase)
 }
 
 func (a *App) unlockPGPLocked(pgpPass []byte) error {
@@ -502,7 +534,11 @@ func (a *App) SavePassword(name string, plaintext []byte) error {
 		return err
 	}
 	defer security.Zero(ciphertext)
-	return st.WriteEncrypted(name, ciphertext)
+	if err := st.WriteEncrypted(name, ciphertext); err != nil {
+		return err
+	}
+	a.autoCommit("Save", name)
+	return nil
 }
 
 // CommitPassword stages and commits the named password file. The push must be
@@ -518,10 +554,18 @@ func (a *App) CommitPassword(name string) error {
 	if !isGitRepo(st.Root()) {
 		return errors.New("the store is not a git repository; nothing to commit")
 	}
-	msg := "Update " + name
-	if err := gitx.Add(st.Root(), name+".gpg"); err != nil {
-		return err
+	rel := name + ".gpg"
+	fullPath := filepath.Join(st.Root(), filepath.FromSlash(rel))
+	if fileExists(fullPath) {
+		if err := gitx.Add(st.Root(), rel); err != nil {
+			return err
+		}
+	} else {
+		if err := gitx.Remove(st.Root(), rel); err != nil {
+			return err
+		}
 	}
+	msg := "Update " + name
 	if _, err := gitx.Commit(st.Root(), msg, a.cfg.GitAuthorName, a.cfg.GitAuthorEmail); err != nil {
 		if errors.Is(err, gitx.ErrUpToDate) {
 			return nil
@@ -529,6 +573,21 @@ func (a *App) CommitPassword(name string) error {
 		return err
 	}
 	return nil
+}
+
+func (a *App) autoCommit(action, name string) {
+	st := a.storePath()
+	if st == nil || !isGitRepo(st.Root()) {
+		return
+	}
+	rel := name + ".gpg"
+	if action == "Remove" {
+		_ = gitx.Remove(st.Root(), rel)
+	} else {
+		_ = gitx.Add(st.Root(), rel)
+	}
+	msg := action + " " + name
+	_, _ = gitx.Commit(st.Root(), msg, a.cfg.GitAuthorName, a.cfg.GitAuthorEmail)
 }
 
 // PasswordExists reports whether the named password is stored. It never touches
@@ -598,7 +657,11 @@ func (a *App) RemovePassword(name string) error {
 	if st == nil {
 		return errors.New("no password store is open; use 'open' or 'clone' first")
 	}
-	return st.Remove(name)
+	if err := st.Remove(name); err != nil {
+		return err
+	}
+	a.autoCommit("Remove", name)
+	return nil
 }
 
 func (a *App) storePath() *store.Store {
@@ -691,11 +754,8 @@ func (a *App) CloneStore(url, dir string) error {
 	}
 	hostport := host + ":22"
 
-	if err := a.requireUnlocked(); err != nil {
-		return err
-	}
 	if a.sshKeyOrNil() == nil {
-		return errors.New("no SSH key imported; import an SSH private key first")
+		return errors.New("SSH key is not loaded; import an SSH private key or unlock first")
 	}
 
 	// Host key verification: capture and compare with our known_hosts store.
@@ -707,24 +767,55 @@ func (a *App) CloneStore(url, dir string) error {
 		return fmt.Errorf("host key for %s is not yet trusted; run 'test-ssh %s' first and confirm the fingerprint", host, host)
 	}
 
-	if err := gitx.Clone(url, dir, a.sshAuth()); err != nil {
+	if err := a.cloneOrReuse(url, dir); err != nil {
 		return err
 	}
 
 	st, err := store.Open(dir)
 	if err != nil {
+		_ = os.RemoveAll(dir)
 		return fmt.Errorf("cloned repository is not a pass store: %w", err)
 	}
 	a.mu.Lock()
-	if _, err := a.pgpSvc.ResolveRecipients(st.GPGIDs()); err != nil {
-		a.mu.Unlock()
-		return err
-	}
 	a.store = st
 	a.cfg.StorePath = st.Root()
 	a.cfg.GitRemote = url
 	a.mu.Unlock()
 	return a.saveConfig()
+}
+
+// cloneOrReuse brings the store directory in line with the remote. A target
+// that is already a valid pass store is reused as-is (a previous clone that
+// succeeded but could not be validated, or an already-configured store). When
+// the target is missing or an empty leftover, the repository is cloned into a
+// temporary sibling directory and moved into place, so an interrupted or
+// failed clone never leaves a half-cloned store behind.
+func (a *App) cloneOrReuse(url, dir string) error {
+	if st, err := store.Open(dir); err == nil {
+		a.mu.Lock()
+		a.store = st
+		a.mu.Unlock()
+		return nil
+	}
+	if entries, err := os.ReadDir(dir); err == nil {
+		if len(entries) > 0 {
+			return fmt.Errorf("target directory %q is not empty and is not a pass store; refusing to touch it", dir)
+		}
+		_ = os.Remove(dir) // drop an empty leftover before cloning
+	}
+	tmp := dir + ".tmp"
+	if err := os.RemoveAll(tmp); err != nil {
+		return err
+	}
+	if err := gitx.Clone(url, tmp, a.sshAuth()); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
+	}
+	return nil
 }
 
 // sshAuth builds the go-git SSH auth method from the unlocked key.
@@ -754,7 +845,7 @@ func (a *App) Sync() error {
 		return errors.New("no password store open")
 	}
 	if a.sshKeyOrNil() == nil {
-		return errors.New("no SSH key imported; unable to sync over SSH")
+		return errors.New("SSH key is not loaded; import an SSH private key or unlock first")
 	}
 	auth := a.sshAuth()
 	root := st.Root()
@@ -819,6 +910,38 @@ func (a *App) SetGitAuthor(name, email string) error {
 	a.cfg.GitAuthorEmail = email
 	a.mu.Unlock()
 	return a.saveConfig()
+}
+
+// SetAutoLock persists the idle auto-lock timeout in minutes (0 disables it).
+func (a *App) SetAutoLock(minutes int) error {
+	if minutes < 0 {
+		return errors.New("auto-lock cannot be negative")
+	}
+	a.mu.Lock()
+	a.cfg.AutoLockMinutes = minutes
+	a.mu.Unlock()
+	return a.saveConfig()
+}
+
+// SetClipboardClear persists how long copied secrets stay on the clipboard.
+func (a *App) SetClipboardClear(seconds int) error {
+	if seconds < 1 {
+		return errors.New("clipboard clear must be at least 1 second")
+	}
+	a.mu.Lock()
+	a.cfg.ClipboardClearSeconds = seconds
+	a.mu.Unlock()
+	return a.saveConfig()
+}
+
+// CloneHostport extracts the host:22 hostport for a git SSH URL so the host
+// key can be checked and trusted before cloning.
+func (a *App) CloneHostport(url string) (string, error) {
+	host := gitHostFromURL(url)
+	if host == "" {
+		return "", fmt.Errorf("cannot determine SSH host from %q", url)
+	}
+	return host + ":22", nil
 }
 
 func (a *App) defaultCloneDir(url string) string {

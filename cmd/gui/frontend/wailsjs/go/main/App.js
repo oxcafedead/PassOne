@@ -10,6 +10,10 @@ export function ClipboardClearSeconds() {
   return window['go']['main']['App']['ClipboardClearSeconds']();
 }
 
+export function CloneStore(arg1, arg2) {
+  return window['go']['main']['App']['CloneStore'](arg1, arg2);
+}
+
 export function CopyPassword(arg1) {
   return window['go']['main']['App']['CopyPassword'](arg1);
 }
@@ -18,24 +22,92 @@ export function CreatePassword(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CreatePassword'](arg1, arg2, arg3, arg4);
 }
 
+export function CurrentSettings() {
+  return window['go']['main']['App']['CurrentSettings']();
+}
+
+export function ImportPGPKeyFile(arg1, arg2) {
+  return window['go']['main']['App']['ImportPGPKeyFile'](arg1, arg2);
+}
+
+export function ImportSSHKeyFile(arg1, arg2) {
+  return window['go']['main']['App']['ImportSSHKeyFile'](arg1, arg2);
+}
+
+export function HasSSHKeyLoaded() {
+  return window['go']['main']['App']['HasSSHKeyLoaded']();
+}
+
 export function IsUnlocked() {
   return window['go']['main']['App']['IsUnlocked']();
+}
+
+export function KnownHosts() {
+  return window['go']['main']['App']['KnownHosts']();
 }
 
 export function ListPasswords() {
   return window['go']['main']['App']['ListPasswords']();
 }
 
+export function LoadSSHKey(arg1) {
+  return window['go']['main']['App']['LoadSSHKey'](arg1);
+}
+
 export function Lock() {
   return window['go']['main']['App']['Lock']();
+}
+
+export function OpenLocalStore(arg1) {
+  return window['go']['main']['App']['OpenLocalStore'](arg1);
+}
+
+export function PickPrivateKey(arg1) {
+  return window['go']['main']['App']['PickPrivateKey'](arg1);
+}
+
+export function PickStoreDir() {
+  return window['go']['main']['App']['PickStoreDir']();
+}
+
+export function PrepareClone(arg1) {
+  return window['go']['main']['App']['PrepareClone'](arg1);
 }
 
 export function RemovePassword(arg1) {
   return window['go']['main']['App']['RemovePassword'](arg1);
 }
 
+export function SetAutoLock(arg1) {
+  return window['go']['main']['App']['SetAutoLock'](arg1);
+}
+
+export function SetClipboardClear(arg1) {
+  return window['go']['main']['App']['SetClipboardClear'](arg1);
+}
+
+export function SetGitAuthor(arg1, arg2) {
+  return window['go']['main']['App']['SetGitAuthor'](arg1, arg2);
+}
+
 export function ShowPassword(arg1) {
   return window['go']['main']['App']['ShowPassword'](arg1);
+}
+
+export function Status() {
+  return window['go']['main']['App']['Status']();
+}
+
+export function StoredStores() {
+  return window['go']['main']['App']['StoredStores']();
+}
+
+export function Sync() {
+  return window['go']['main']['App']['Sync']();
+}
+
+export function TrustHost(arg1) {
+  return window['go']['main']['App']['TrustHost'](arg1);
 }
 
 export function Unlock(arg1, arg2) {

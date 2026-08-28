@@ -295,3 +295,27 @@ func TestOriginRemoteConfig(t *testing.T) {
 		t.Fatalf("origin URLs = %v", rem.Config().URLs)
 	}
 }
+
+func TestRemoveAndCommit(t *testing.T) {
+	name := "repo7"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x", "b.txt": "y"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(work, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(work, "a.txt"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := Commit(work, "remove a.txt", "T", "t@x"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	st, err := Status(work)
+	if err != nil || strings.TrimSpace(st) != "" {
+		t.Fatalf("expected clean tree after commit, got status %q err %v", st, err)
+	}
+}

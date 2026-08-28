@@ -440,9 +440,10 @@ func ensurePGPUnlocked(e *env) error {
 }
 
 // ensureSSHUnlocked unlocks only the SSH key. Used by public-key and to
-// prepare SSH-backed commands that already have their OpenPGP key loaded.
+// prepare SSH-backed commands that already have their OpenPGP key loaded. A
+// loaded SSH key is enough for transport; no PGP session is started.
 func ensureSSHUnlocked(e *env) error {
-	if e.app.IsUnlocked() && e.app.HasSSHKeyLoaded() {
+	if e.app.HasSSHKeyLoaded() {
 		return nil
 	}
 	var sshPass []byte

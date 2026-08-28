@@ -11,8 +11,51 @@
     CreatePassword,
     UpdatePassword,
     RemovePassword,
+    PickPrivateKey,
+    PickStoreDir,
+    ImportPGPKeyFile,
+    ImportSSHKeyFile,
+    HasSSHKeyLoaded,
+    LoadSSHKey,
+    OpenLocalStore,
+    StoredStores,
+    PrepareClone,
+    TrustHost,
+    CloneStore,
+    CurrentSettings,
+    SetAutoLock,
+    SetClipboardClear,
+    SetGitAuthor,
+    Status,
+    Sync,
+    KnownHosts,
   } from '../wailsjs/go/main/App.js'
   import {EventsOn} from '../wailsjs/runtime/runtime.js'
+
+  interface SettingsInfo {
+    dataDir: string
+    storePath: string
+    gitRemote: string
+    pgpKeyFingerprint: string
+    sshKeyId: string
+    autoLockMinutes: number
+    clipboardClearSeconds: number
+    gitAuthorName: string
+    gitAuthorEmail: string
+    hasPgp: boolean
+    hasSsh: boolean
+  }
+
+  interface PickedDlg {
+    path: string
+    canceled: boolean
+  }
+
+  interface ClonePrep {
+    host: string
+    fingerprint: string
+    known: boolean
+  }
 
   let info: Record<string, string> = {dataDir: '', storePath: '', pgpKey: '', sshKey: '', autoLock: ''}
   let pgpPass: string = ''
@@ -45,6 +88,39 @@
   let status: string = ''
   let statusTimer: ReturnType<typeof setTimeout> | null = null
 
+  // Settings / onboarding screen state.
+  let settingsOpen: boolean = false
+  let sw: SettingsInfo = {
+    dataDir: '',
+    storePath: '',
+    gitRemote: '',
+    pgpKeyFingerprint: '',
+    sshKeyId: '',
+    autoLockMinutes: 0,
+    clipboardClearSeconds: 30,
+    gitAuthorName: '',
+    gitAuthorEmail: '',
+    hasPgp: false,
+    hasSsh: false,
+  }
+  let setupErr: string = ''
+  let pgpPicked: string = ''
+  let sshPicked: string = ''
+  let sshLoaded: boolean = false
+  let importBusy: boolean = false
+  let openBusy: boolean = false
+  let cloneUrl: string = ''
+  let cloneBusy: boolean = false
+  let clonePrep: ClonePrep | null = null
+  let prefsBusy: boolean = false
+  let gitText: string = ''
+  let gitBusy: boolean = false
+  let hosts: string[] = []
+  let hostsLoaded: boolean = false
+  let localStores: string[] = []
+  let onboarding: boolean = false
+  let step: number = 0
+
   function flash(msg: string): void {
     status = msg
     if (statusTimer) {
@@ -56,6 +132,14 @@
   }
 
   $: filtered = entries.filter((e) => e.toLowerCase().includes(query.toLowerCase()))
+
+  // Setup wizard: step 1 needs an SSH key and a store, the PGP key is only
+  // needed to decrypt passwords and can be imported later.
+  $: canNext = step === 0
+    ? sw.hasSsh && sw.storePath !== '' && !cloneBusy && !openBusy && !importBusy
+    : step === 1
+      ? !importBusy
+      : true
 
   // Tree model derived from the flat entry paths.
   type Dir = {kind: 'dir'; name: string; path: string; count: number; children: Node[]}
@@ -278,6 +362,299 @@
     edError = ''
     status = ''
     stopCountdown()
+    settingsOpen = false
+  }
+
+  async function loadSettings(): Promise<void> {
+    try {
+      sw = await CurrentSettings()
+      info.storePath = sw.storePath
+      info.pgpKey = sw.hasPgp ? sw.pgpKeyFingerprint : ''
+      info.sshKey = sw.hasSsh ? sw.sshKeyId : ''
+    } catch (e) {
+      setupErr = String(e)
+    }
+    try {
+      sshLoaded = (await HasSSHKeyLoaded()) ?? false
+    } catch (_) {
+      sshLoaded = false
+    }
+    try {
+      hostsLoaded = true
+      hosts = (await KnownHosts()) ?? []
+    } catch (_) {
+      hosts = []
+    }
+    try {
+      localStores = (await StoredStores()) ?? []
+    } catch (_) {
+      localStores = []
+    }
+  }
+
+  function storeBase(p: string): string {
+    return p.split(/[\\/]+/).filter(Boolean).pop() ?? p
+  }
+
+  function openSettings(): void {
+    setupErr = ''
+    onboarding = false
+    void loadSettings()
+    settingsOpen = true
+  }
+
+  // Landing point when something is unfinished: jump straight into the wizard
+  // at the step that still needs work instead of a dead unlock screen.
+  //  - missing SSH key or no store → step 1 (repository)
+  //  - otherwise a missing PGP key → step 2 (decrypt)
+  //  - everything in place → no wizard.
+  async function openSettingsIfFirstRun(): Promise<void> {
+    await loadSettings()
+    let start: number | null = null
+    if (!sw.hasSsh || !sw.storePath) {
+      start = 0
+    } else if (!sw.hasPgp) {
+      start = 1
+    }
+    if (start !== null) {
+      onboarding = true
+      step = start
+      settingsOpen = true
+    }
+  }
+
+  function closeSettings(): void {
+    settingsOpen = false
+    pgpPicked = ''
+    sshPicked = ''
+    cloneUrl = ''
+    clonePrep = null
+    setupErr = ''
+  }
+
+  async function pickPgp(): Promise<void> {
+    try {
+      const r = await PickPrivateKey('Select your OpenPGP private key (ASCII armored)')
+      if (!r.canceled) {
+        pgpPicked = r.path
+      }
+    } catch (e) {
+      setupErr = String(e)
+    }
+  }
+
+  async function pickSsh(): Promise<void> {
+    try {
+      const r = await PickPrivateKey('Select your SSH private key (OpenSSH format)')
+      if (!r.canceled) {
+        sshPicked = r.path
+      }
+    } catch (e) {
+      setupErr = String(e)
+    }
+  }
+
+  async function importPgp(): Promise<void> {
+    if (!pgpPicked) {
+      setupErr = 'Choose a PGP key file first'
+      return
+    }
+    importBusy = true
+    setupErr = ''
+    try {
+      const msg = await ImportPGPKeyFile(pgpPicked, pgpPass)
+      pgpPicked = ''
+      pgpPass = ''
+      flash(msg)
+      await loadSettings()
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      importBusy = false
+    }
+  }
+
+  async function importSsh(): Promise<void> {
+    if (!sshPicked) {
+      setupErr = 'Choose an SSH key file first'
+      return
+    }
+    importBusy = true
+    setupErr = ''
+    try {
+      const msg = await ImportSSHKeyFile(sshPicked, sshPass)
+      sshPicked = ''
+      sshPass = ''
+      flash(msg)
+      await loadSettings()
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      importBusy = false
+    }
+  }
+
+  async function sshLoad(): Promise<void> {
+    importBusy = true
+    setupErr = ''
+    try {
+      await LoadSSHKey(sshPass)
+      sshPass = ''
+      sshLoaded = true
+      flash('SSH key loaded')
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      importBusy = false
+    }
+  }
+
+  async function openStore(): Promise<void> {
+    openBusy = true
+    setupErr = ''
+    try {
+      const r = await PickStoreDir()
+      if (r.canceled) {
+        return
+      }
+      await OpenLocalStore(r.path)
+      flash('Store opened: ' + r.path)
+      await loadSettings()
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      openBusy = false
+    }
+  }
+
+  async function useLocalStore(p: string): Promise<void> {
+    openBusy = true
+    setupErr = ''
+    try {
+      await OpenLocalStore(p)
+      flash('Store opened: ' + p)
+      await loadSettings()
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      openBusy = false
+    }
+  }
+
+  async function probeClone(): Promise<void> {
+    const url = cloneUrl.trim()
+    if (!url) {
+      setupErr = 'Enter a git SSH URL first (git@host:owner/store.git)'
+      return
+    }
+    cloneBusy = true
+    setupErr = ''
+    clonePrep = null
+    try {
+      clonePrep = await PrepareClone(url)
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      cloneBusy = false
+    }
+  }
+
+  async function doClone(): Promise<void> {
+    if (!sshLoaded) {
+      setupErr = 'Load your SSH key with its passphrase first'
+      return
+    }
+    if (!clonePrep) {
+      await probeClone()
+      return
+    }
+    cloneBusy = true
+    setupErr = ''
+    try {
+      if (!clonePrep.known) {
+        await TrustHost(clonePrep.host)
+      }
+      const url = cloneUrl.trim()
+      await CloneStore(url, '')
+      flash('Store cloned and opened')
+      clonePrep = null
+      cloneUrl = ''
+      await loadSettings()
+      if (unlocked) {
+        await refresh()
+      }
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      cloneBusy = false
+    }
+  }
+
+  async function savePrefs(): Promise<void> {
+    prefsBusy = true
+    setupErr = ''
+    try {
+      await SetAutoLock(sw.autoLockMinutes)
+      await SetClipboardClear(sw.clipboardClearSeconds)
+      await SetGitAuthor(sw.gitAuthorName, sw.gitAuthorEmail)
+      flash('Settings saved')
+      await loadSettings()
+      try {
+        info = await AppInfo()
+      } catch (_) {
+        // keep defaults
+      }
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      prefsBusy = false
+    }
+  }
+
+  async function finishWizard(): Promise<void> {
+    await savePrefs()
+    if (setupErr) {
+      return
+    }
+    onboarding = false
+    settingsOpen = false
+  }
+
+  async function runStatus(): Promise<void> {
+    gitBusy = true
+    setupErr = ''
+    try {
+      gitText = await Status()
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      gitBusy = false
+    }
+  }
+
+  async function runSync(): Promise<void> {
+    gitBusy = true
+    setupErr = ''
+    try {
+      await Sync()
+      flash('Sync complete')
+      gitText = await Status()
+      await loadSettings()
+      await refresh()
+    } catch (e) {
+      setupErr = String(e)
+    } finally {
+      gitBusy = false
+    }
+  }
+
+  async function reloadHosts(): Promise<void> {
+    try {
+      hostsLoaded = true
+      hosts = await KnownHosts()
+    } catch (e) {
+      setupErr = String(e)
+    }
   }
 
   function openAdd(): void {
@@ -392,10 +769,11 @@
   }
 
   onMount(() => {
-    void load()
+    void load().then(() => void openSettingsIfFirstRun())
     const offLock = EventsOn('passone:locked', onLockEvent)
     const offUnlock = EventsOn('passone:unlocked', () => {
       unlocked = true
+      sshLoaded = true
       void refresh()
     })
     return () => {
@@ -426,8 +804,8 @@
     <dl class="panel ring-panel grid w-full max-w-sm grid-cols-2 gap-x-6 gap-y-1 rounded-xl p-4 text-xs text-faint">
       <dt class="text-mute">Data dir</dt><dd class="truncate text-right">{info.dataDir}</dd>
       <dt class="text-mute">Store</dt><dd class="truncate text-right">{info.storePath}</dd>
-      <dt class="text-mute">PGP key</dt><dd class="text-right">{info.pgpKey}</dd>
-      <dt class="text-mute">SSH key</dt><dd class="text-right">{info.sshKey}</dd>
+      <dt class="text-mute">PGP key</dt><dd class="truncate text-right" title={info.pgpKey}>{info.pgpKey}</dd>
+      <dt class="text-mute">SSH key</dt><dd class="truncate text-right" title={info.sshKey}>{info.sshKey}</dd>
       <dt class="text-mute">Auto-lock</dt><dd class="text-right">{info.autoLock}</dd>
     </dl>
 
@@ -447,6 +825,17 @@
         {busy ? 'Unlocking…' : 'Unlock'}
       </button>
     </form>
+
+    <button
+      on:click={openSettings}
+      title="Setup / settings"
+      class="btn-ghost fixed top-4 right-4 z-10 rounded-lg p-2"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+    </button>
   </main>
 {:else}
   <main class="app-bg flex h-full min-h-0 w-full text-main">
@@ -551,7 +940,19 @@
         {/if}
       </nav>
 
-      <p class="text-dim border-panel border-t px-1 pt-2 text-xs">Auto-lock: {info.autoLock}</p>
+      <div class="border-panel flex items-center gap-2 border-t px-1 pt-2">
+        <p class="text-dim flex-1 text-xs">Auto-lock: {info.autoLock}</p>
+        <button
+          on:click={openSettings}
+          title="Setup / settings"
+          class="btn-ghost rounded-lg p-1.5"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+        </button>
+      </div>
     </aside>
 
     <section class="flex min-w-0 flex-1 flex-col gap-3 p-4">
@@ -715,5 +1116,430 @@
 {#if status}
   <div class="panel ring-panel text-main fixed right-4 bottom-4 z-50 rounded-lg px-3 py-2 text-sm">
     {status}
+  </div>
+{/if}
+
+{#if settingsOpen}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.45)">
+    <div class="panel ring-panel flex max-h-full w-full max-w-2xl flex-col gap-4 overflow-y-auto rounded-xl p-5">
+      <div class="flex items-center gap-2">
+        <h3 class="text-main flex-1 text-sm font-semibold">
+          {onboarding
+            ? 'Step ' + (step + 1) + ' of 3 · ' + ['Connect a repository', 'Decrypt passwords', 'Preferences'][step]
+            : 'Setup & settings'}
+        </h3>
+        <button on:click={closeSettings} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Close</button>
+      </div>
+
+      {#if onboarding}
+        <div class="flex items-center gap-1.5">
+          {#each ['Repository', 'Decrypt key', 'Preferences'] as label, i}
+            <div
+              class={'h-1.5 flex-1 rounded-full ' + (i <= step ? 'accent-soft' : 'panel ring-panel')}
+              title={label}
+            ></div>
+          {/each}
+        </div>
+
+        {#if step === 0}
+          <section class="flex flex-col gap-2">
+            <p class="text-faint text-xs leading-relaxed">
+              PassOne syncs your passwords from a git store over SSH. Add your SSH key, then
+              open an existing store folder or clone one.
+            </p>
+
+            <h4 class="text-mute mt-1 text-xs font-semibold tracking-wide uppercase">SSH key</h4>
+            {#if sw.hasSsh && sshLoaded}
+              <div class="flex items-center gap-2">
+                <span class="badge-success rounded-md px-2 py-1 text-xs">SSH key ready</span>
+                <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs">{sw.sshKeyId}</span>
+              </div>
+            {:else if sw.hasSsh}
+              <div class="flex items-center gap-2">
+                <span class="badge-success rounded-md px-2 py-1 text-xs">SSH key stored</span>
+                <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs">{sw.sshKeyId}</span>
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-faint text-xs">Passphrase to use the key (empty if your key has none)</span>
+                <div class="flex items-center gap-2">
+                  <input type="password" bind:value={sshPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
+                  <button
+                    on:click={sshLoad}
+                    disabled={importBusy}
+                    class="btn-accent rounded-lg px-3 py-2 text-sm"
+                  >
+                    {importBusy ? 'Loading…' : 'Load key'}
+                  </button>
+                </div>
+              </div>
+            {:else}
+              <div class="flex items-center gap-2">
+                <button on:click={pickSsh} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose SSH key…</button>
+                <span class="text-faint min-w-0 flex-1 truncate text-xs">
+                  {sshPicked || 'No SSH key imported'}
+                </span>
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-faint text-xs">Passphrase (empty if your key has none)</span>
+                <div class="flex items-center gap-2">
+                  <input type="password" bind:value={sshPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
+                  <button
+                    on:click={importSsh}
+                    disabled={importBusy || !sshPicked}
+                    class="btn-accent rounded-lg px-3 py-2 text-sm"
+                  >
+                    {importBusy ? 'Importing…' : 'Import'}
+                  </button>
+                </div>
+              </div>
+            {/if}
+
+            <h4 class="text-mute mt-2 text-xs font-semibold tracking-wide uppercase">Store</h4>
+            {#if sw.storePath}
+              <p class="text-faint truncate text-xs">
+                Current: <span class="text-sub font-mono">{sw.storePath}</span>
+              </p>
+              {#if sw.gitRemote}
+                <p class="text-faint truncate text-xs">
+                  Remote: <span class="text-sub font-mono">{sw.gitRemote}</span>
+                </p>
+              {/if}
+              <div class="flex items-center gap-2">
+                <button on:click={openStore} disabled={openBusy} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">
+                  Open another folder…
+                </button>
+                <span class="badge-success rounded-md px-2 py-1 text-xs">Store ready</span>
+              </div>
+            {:else}
+              <button
+                on:click={openStore}
+                disabled={openBusy}
+                class="btn-ghost w-fit rounded-lg px-3 py-1.5 text-sm"
+              >
+                {openBusy ? 'Opening…' : 'Open an existing store folder…'}
+              </button>
+              {#if localStores.length > 0}
+                <div class="text-mute mt-1 text-xs">Found on this machine:</div>
+                <ul class="flex flex-col gap-1">
+                  {#each localStores as p}
+                    <li>
+                      <button
+                        on:click={() => useLocalStore(p)}
+                        disabled={openBusy}
+                        title={p}
+                        class="btn-ghost w-full truncate rounded-lg px-3 py-1.5 text-left font-mono text-xs"
+                      >
+                        {storeBase(p)}
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+              <div class="text-faint mt-1 text-xs">… or clone one over SSH:</div>
+              <input
+                bind:value={cloneUrl}
+                placeholder="git@github.com:you/passwords.git"
+                class="input rounded-lg px-3 py-2 font-mono text-sm"
+              />
+              {#if clonePrep}
+                <p class="text-faint text-xs break-words">
+                  Host {clonePrep.host} · {clonePrep.known ? 'already trusted' : 'not yet trusted'} · fingerprint {clonePrep.fingerprint}
+                </p>
+              {/if}
+              <button
+                on:click={doClone}
+                disabled={cloneBusy}
+                class="btn-accent rounded-lg px-3 py-2 text-sm"
+              >
+                {cloneBusy
+                  ? 'Working…'
+                  : clonePrep
+                    ? clonePrep.known
+                      ? 'Clone store'
+                      : 'Trust host & clone'
+                    : 'Probe host'}
+              </button>
+            {/if}
+          </section>
+        {:else if step === 1}
+          <section class="flex flex-col gap-2">
+            <p class="text-faint text-xs leading-relaxed">
+              Encrypted passwords are only readable with the matching OpenPGP secret key of
+              the store. You can skip this and import the key later from Setup — passwords
+              will stay locked until then.
+            </p>
+
+            {#if sw.hasPgp}
+              <div class="flex items-center gap-2">
+                <span class="badge-success rounded-md px-2 py-1 text-xs">PGP key ready</span>
+                <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs">{sw.pgpKeyFingerprint}</span>
+              </div>
+            {:else}
+              <div class="flex items-center gap-2">
+                <button on:click={pickPgp} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose PGP key…</button>
+                <span class="text-faint min-w-0 flex-1 truncate text-xs">
+                  {pgpPicked || 'No OpenPGP key imported'}
+                </span>
+              </div>
+              <div class="flex flex-col gap-1">
+                <span class="text-faint text-xs">Passphrase (empty if your key has none)</span>
+                <div class="flex items-center gap-2">
+                  <input type="password" bind:value={pgpPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
+                  <button
+                    on:click={importPgp}
+                    disabled={importBusy || !pgpPicked}
+                    class="btn-accent rounded-lg px-3 py-2 text-sm"
+                  >
+                    {importBusy ? 'Importing…' : 'Import'}
+                  </button>
+                </div>
+              </div>
+            {/if}
+          </section>
+        {:else}
+          <section class="flex flex-col gap-2">
+            <p class="text-faint text-xs leading-relaxed">
+              One last step — these are optional and can be changed later from Setup.
+            </p>
+            <div class="grid grid-cols-2 gap-2">
+              <label class="text-faint flex flex-col gap-1 text-xs">
+                Auto-lock after (minutes, 0 = never)
+                <input type="number" min="0" bind:value={sw.autoLockMinutes} class="input rounded-lg px-3 py-2 text-sm"/>
+              </label>
+              <label class="text-faint flex flex-col gap-1 text-xs">
+                Clear clipboard after (seconds)
+                <input type="number" min="1" bind:value={sw.clipboardClearSeconds} class="input rounded-lg px-3 py-2 text-sm"/>
+              </label>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <label class="text-faint flex flex-col gap-1 text-xs">
+                Git author name
+                <input bind:value={sw.gitAuthorName} class="input rounded-lg px-3 py-2 text-sm"/>
+              </label>
+              <label class="text-faint flex flex-col gap-1 text-xs">
+                Git author email
+                <input type="email" bind:value={sw.gitAuthorEmail} class="input rounded-lg px-3 py-2 text-sm"/>
+              </label>
+            </div>
+          </section>
+        {/if}
+
+        {#if setupErr}
+          <p class="text-danger text-xs break-words">{setupErr}</p>
+        {/if}
+
+        <div class="mt-1 flex items-center justify-between gap-2">
+          <button
+            on:click={() => {
+              step = Math.max(0, step - 1)
+              setupErr = ''
+            }}
+            disabled={step === 0}
+            class="btn-ghost rounded-lg px-3 py-2 text-sm"
+          >
+            Back
+          </button>
+          {#if step < 2}
+            <button
+              on:click={() => {
+                setupErr = ''
+                step += 1
+              }}
+              disabled={!canNext}
+              class="btn-accent rounded-lg px-3 py-2 text-sm font-medium"
+            >
+              Next
+            </button>
+          {:else}
+            <button
+              on:click={finishWizard}
+              disabled={prefsBusy}
+              class="btn-accent rounded-lg px-3 py-2 text-sm font-medium"
+            >
+              {prefsBusy ? 'Saving…' : 'Finish'}
+            </button>
+          {/if}
+        </div>
+      {:else}
+      <section class="flex flex-col gap-2">
+        <h4 class="text-mute text-xs font-semibold tracking-wide uppercase">Your keys</h4>
+        <div class="flex items-center gap-2">
+          <button on:click={pickPgp} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose PGP key…</button>
+          <span class="text-faint min-w-0 flex-1 truncate text-xs">
+            {#if pgpPicked}
+              {pgpPicked}
+            {:else if sw.hasPgp}
+              Imported: {sw.pgpKeyFingerprint}
+            {:else}
+              No OpenPGP key imported
+            {/if}
+          </span>
+        </div>
+        <div class="flex flex-col gap-2">
+          <label class="text-faint flex flex-1 flex-col gap-1 text-xs">
+            PGP passphrase (leave empty if your key has none)
+            <input type="password" bind:value={pgpPass} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+          </label>
+          <button
+            on:click={importPgp}
+            disabled={importBusy || !pgpPicked}
+            class="btn-accent rounded-lg px-3 py-2 text-sm"
+          >
+            {importBusy ? 'Importing…' : 'Import PGP key'}
+          </button>
+        </div>
+        <div class="flex items-center gap-2 pt-1">
+          <button on:click={pickSsh} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose SSH key…</button>
+          <span class="text-faint min-w-0 flex-1 truncate text-xs">
+            {#if sshPicked}
+              {sshPicked}
+            {:else if sw.hasSsh}
+              Imported: {sw.sshKeyId}
+            {:else}
+              No SSH key imported
+            {/if}
+          </span>
+        </div>
+        <div class="flex flex-col gap-2">
+          <label class="text-faint flex flex-1 flex-col gap-1 text-xs">
+            SSH passphrase (leave empty if your key has none)
+            <input type="password" bind:value={sshPass} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+          </label>
+          <button
+            on:click={importSsh}
+            disabled={importBusy || !sshPicked}
+            class="btn-accent rounded-lg px-3 py-2 text-sm"
+          >
+            {importBusy ? 'Importing…' : 'Import SSH key'}
+          </button>
+        </div>
+      </section>
+
+      <section class="flex flex-col gap-2">
+        <h4 class="text-mute text-xs font-semibold tracking-wide uppercase">Store</h4>
+        <p class="text-faint truncate text-xs">
+          Current store: <span class="text-sub font-mono">{sw.storePath || '(none)'}</span>
+        </p>
+        {#if sw.gitRemote}
+          <p class="text-faint truncate text-xs">
+            Remote: <span class="text-sub font-mono">{sw.gitRemote}</span>
+          </p>
+        {/if}
+        <button
+          on:click={openStore}
+          disabled={openBusy}
+          class="btn-ghost rounded-lg px-3 py-1.5 text-sm"
+        >
+          {openBusy ? 'Opening…' : 'Open an existing store folder…'}
+        </button>
+        {#if localStores.length > 0}
+          <div class="text-mute mt-1 text-xs">Found on this machine:</div>
+          <ul class="flex flex-col gap-1">
+            {#each localStores as p}
+              <li>
+                <button
+                  on:click={() => useLocalStore(p)}
+                  disabled={openBusy}
+                  title={p}
+                  class="btn-ghost w-full truncate rounded-lg px-3 py-1.5 text-left font-mono text-xs"
+                >
+                  {storeBase(p)}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <div class="text-faint mt-1 text-xs">… or clone one over SSH:</div>
+        <input
+          bind:value={cloneUrl}
+          placeholder="git@github.com:you/passwords.git"
+          class="input rounded-lg px-3 py-2 font-mono text-sm"
+        />
+        {#if clonePrep}
+          <p class="text-faint text-xs break-words">
+            Host {clonePrep.host} · {clonePrep.known ? 'already trusted' : 'not yet trusted'} · fingerprint {clonePrep.fingerprint}
+          </p>
+        {/if}
+        <button
+          on:click={doClone}
+          disabled={cloneBusy}
+          class="btn-accent rounded-lg px-3 py-2 text-sm"
+        >
+          {cloneBusy
+            ? 'Working…'
+            : clonePrep
+              ? clonePrep.known
+                ? 'Clone store'
+                : 'Trust host & clone'
+              : 'Probe host'}
+        </button>
+      </section>
+
+      <section class="flex flex-col gap-2">
+        <h4 class="text-mute text-xs font-semibold tracking-wide uppercase">Preferences</h4>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="text-faint flex flex-col gap-1 text-xs">
+            Auto-lock after (minutes, 0 = never)
+            <input type="number" min="0" bind:value={sw.autoLockMinutes} class="input rounded-lg px-3 py-2 text-sm"/>
+          </label>
+          <label class="text-faint flex flex-col gap-1 text-xs">
+            Clear clipboard after (seconds)
+            <input type="number" min="1" bind:value={sw.clipboardClearSeconds} class="input rounded-lg px-3 py-2 text-sm"/>
+          </label>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="text-faint flex flex-col gap-1 text-xs">
+            Git author name
+            <input bind:value={sw.gitAuthorName} class="input rounded-lg px-3 py-2 text-sm"/>
+          </label>
+          <label class="text-faint flex flex-col gap-1 text-xs">
+            Git author email
+            <input type="email" bind:value={sw.gitAuthorEmail} class="input rounded-lg px-3 py-2 text-sm"/>
+          </label>
+        </div>
+        <button
+          on:click={savePrefs}
+          disabled={prefsBusy}
+          class="btn-accent rounded-lg px-3 py-2 text-sm"
+        >
+          {prefsBusy ? 'Saving…' : 'Save preferences'}
+        </button>
+      </section>
+
+      <section class="flex flex-col gap-2">
+        <h4 class="text-mute text-xs font-semibold tracking-wide uppercase">Git tools</h4>
+        {#if sw.storePath}
+          <div class="flex items-center gap-2">
+            <button on:click={runStatus} disabled={gitBusy} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">
+              Status
+            </button>
+            <button on:click={runSync} disabled={gitBusy} class="btn-accent rounded-lg px-3 py-1.5 text-sm">
+              {gitBusy ? 'Working…' : 'Sync (pull + push)'}
+            </button>
+          </div>
+          {#if gitText}
+            <pre class="panel ring-panel text-sub max-h-40 overflow-auto whitespace-pre-wrap rounded-lg p-2 font-mono text-[11px] leading-relaxed">{gitText}</pre>
+          {/if}
+          <div class="flex items-center gap-2">
+            <button on:click={reloadHosts} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">
+              Refresh known hosts
+            </button>
+            {#if hostsLoaded && hosts.length > 0}
+              <span class="text-faint truncate text-xs">{hosts.length} host(s) trusted</span>
+            {/if}
+          </div>
+          {#if hostsLoaded && hosts.length > 0}
+            <pre class="panel ring-panel text-faint max-h-32 overflow-auto whitespace-pre-wrap rounded-lg p-2 font-mono text-[11px]">{hosts.join('\n')}</pre>
+          {/if}
+        {:else}
+          <p class="text-faint text-xs">Open or clone a store first.</p>
+        {/if}
+      </section>
+
+      {#if setupErr}
+        <p class="text-danger text-xs break-words">{setupErr}</p>
+      {/if}
+      {/if}
+    </div>
   </div>
 {/if}

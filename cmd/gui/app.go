@@ -59,6 +59,65 @@ func (a *App) UpdatePassword(name, password, body string, keepPassword bool) (st
 // RemovePassword deletes a password entry.
 func (a *App) RemovePassword(name string) error { return a.gui.RemovePassword(name) }
 
+// PickPrivateKey opens a file dialog for a private key file.
+func (a *App) PickPrivateKey(title string) (ui.Picked, error) { return a.gui.PickPrivateKey(title) }
+
+// PickStoreDir opens a directory dialog for a password store.
+func (a *App) PickStoreDir() (ui.Picked, error) { return a.gui.PickStoreDir() }
+
+// ImportPGPKeyFile imports an on-disk OpenPGP private key.
+func (a *App) ImportPGPKeyFile(path, passphrase string) (string, error) {
+	return a.gui.ImportPGPKeyFile(path, passphrase)
+}
+
+// ImportSSHKeyFile imports an on-disk OpenSSH private key.
+func (a *App) ImportSSHKeyFile(path, passphrase string) (string, error) {
+	return a.gui.ImportSSHKeyFile(path, passphrase)
+}
+
+// HasSSHKeyLoaded reports whether the SSH signer is in memory for transport.
+func (a *App) HasSSHKeyLoaded() bool { return a.gui.HasSSHKeyLoaded() }
+
+// LoadSSHKey decrypts the stored SSH key into memory without unlocking the
+// session. Used by onboarding to make cloning possible after a restart.
+func (a *App) LoadSSHKey(sshPass string) error { return a.gui.LoadSSHKey(sshPass) }
+
+// OpenLocalStore validates and activates a local pass store directory.
+func (a *App) OpenLocalStore(path string) error { return a.gui.OpenLocalStore(path) }
+
+// StoredStores lists local pass stores under the app stores directory.
+func (a *App) StoredStores() []string { return a.gui.StoredStores() }
+
+// PrepareClone probes an SSH git URL and reports the server host key state.
+func (a *App) PrepareClone(url string) (ui.ClonePrep, error) { return a.gui.PrepareClone(url) }
+
+// TrustHost records the just-probed host key as trusted.
+func (a *App) TrustHost(hostport string) error { return a.gui.TrustHost(hostport) }
+
+// CloneStore clones an SSH git URL and activates the resulting store.
+func (a *App) CloneStore(url, dir string) error { return a.gui.CloneStore(url, dir) }
+
+// CurrentSettings returns the environment for the setup screen.
+func (a *App) CurrentSettings() ui.SettingsInfo { return a.gui.CurrentSettings() }
+
+// SetAutoLock updates the idle auto-lock timeout in minutes.
+func (a *App) SetAutoLock(minutes int) error { return a.gui.SetAutoLock(minutes) }
+
+// SetClipboardClear updates the clipboard clear delay in seconds.
+func (a *App) SetClipboardClear(seconds int) error { return a.gui.SetClipboardClear(seconds) }
+
+// SetGitAuthor updates the git commit identity.
+func (a *App) SetGitAuthor(name, email string) error { return a.gui.SetGitAuthor(name, email) }
+
+// Status returns git status text for the active store.
+func (a *App) Status() (string, error) { return a.gui.Status() }
+
+// Sync performs fetch → pull → push for the active store.
+func (a *App) Sync() error { return a.gui.Sync() }
+
+// KnownHosts lists trusted SSH hosts.
+func (a *App) KnownHosts() []string { return a.gui.KnownHosts() }
+
 func presence(s string) string {
 	if s == "" {
 		return "(none)"

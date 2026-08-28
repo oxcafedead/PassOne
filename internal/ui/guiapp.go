@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/oxcafedead/passone/internal/app"
 	"github.com/oxcafedead/passone/internal/cliputil"
 	"github.com/oxcafedead/passone/internal/security"
+	"github.com/oxcafedead/passone/internal/sshx"
 )
 
 // GUI wraps the core App for the desktop interface. It mirrors the CLI surface
@@ -65,6 +67,16 @@ func (g *GUI) Lock() { g.core.Lock() }
 // no passphrase (relevant for unprotected keys).
 func (g *GUI) Unlock(pgpPass, sshPass string) error {
 	return g.core.Unlock([]byte(pgpPass), []byte(sshPass))
+}
+
+// HasSSHKeyLoaded reports whether the SSH signer is in memory for transport.
+func (g *GUI) HasSSHKeyLoaded() bool { return g.core.HasSSHKeyLoaded() }
+
+// LoadSSHKey decrypts the stored SSH key into memory without starting an
+// unlocked session. Used by onboarding to make cloning possible after a
+// restart, before the user deliberately unlocks.
+func (g *GUI) LoadSSHKey(sshPass string) error {
+	return g.core.LoadStoredSSHKey([]byte(sshPass))
 }
 
 // HasStoredPGPKey reports whether a secret OpenPGP key was imported.
@@ -196,4 +208,200 @@ func (g *GUI) UpdatePassword(name, password, body string, keepPassword bool) (st
 // RemovePassword deletes a named entry. It decrypts nothing.
 func (g *GUI) RemovePassword(name string) error {
 	return g.core.RemovePassword(strings.TrimSpace(name))
+}
+
+// Picked is the result of a native file/directory dialog.
+type Picked struct {
+	Path     string `json:"path"`
+	Canceled bool   `json:"canceled"`
+}
+
+// PickPrivateKey opens a file dialog for a private key file. Canceled is true
+// when the user dismissed the dialog without choosing anything.
+func (g *GUI) PickPrivateKey(title string) (Picked, error) {
+	ctx := g.ctxOrNil()
+	if ctx == nil {
+		return Picked{}, errors.New("window runtime is not ready")
+	}
+	if title == "" {
+		title = "Select a private key file"
+	}
+	path, err := runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
+		Title: title,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Key files", Pattern: "*.asc;*.gpg;*.key;*.pem;*"},
+			{DisplayName: "All files", Pattern: "*.*"},
+		},
+	})
+	if err != nil {
+		return Picked{}, err
+	}
+	if path == "" {
+		return Picked{Canceled: true}, nil
+	}
+	return Picked{Path: path}, nil
+}
+
+// PickStoreDir opens a directory dialog for a password store.
+func (g *GUI) PickStoreDir() (Picked, error) {
+	ctx := g.ctxOrNil()
+	if ctx == nil {
+		return Picked{}, errors.New("window runtime is not ready")
+	}
+	path, err := runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
+		Title: "Select a password store directory",
+	})
+	if err != nil {
+		return Picked{}, err
+	}
+	if path == "" {
+		return Picked{Canceled: true}, nil
+	}
+	return Picked{Path: path}, nil
+}
+
+// ImportPGPKeyFile imports an on-disk ASCII-armored OpenPGP private key. The
+// file bytes are wiped from memory after import.
+func (g *GUI) ImportPGPKeyFile(path, passphrase string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	defer security.Zero(data)
+	infos, err := g.core.ImportPGPKey(data, []byte(passphrase))
+	if err != nil {
+		return "", err
+	}
+	if len(infos) == 0 {
+		return "", errors.New("no usable OpenPGP private key found in file")
+	}
+	return fmt.Sprintf("Imported OpenPGP key %s", infos[0].Fingerprint), nil
+}
+
+// ImportSSHKeyFile imports an on-disk OpenSSH private key.
+func (g *GUI) ImportSSHKeyFile(path, passphrase string) (string, error) {
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	defer security.Zero(pem)
+	k, err := g.core.ImportSSHKey(pem, []byte(passphrase))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Imported SSH key %s / %s", k.Algorithm(), k.Fingerprint()), nil
+}
+
+// OpenLocalStore validates a local pass store directory and records it as the
+// active store.
+func (g *GUI) OpenLocalStore(path string) error {
+	return g.core.OpenLocalStore(strings.TrimSpace(path))
+}
+
+// StoredStores lists local pass stores under the app stores directory.
+func (g *GUI) StoredStores() []string { return g.core.StoredStores() }
+
+// ClonePrep is the outcome of probing an SSH git URL before cloning.
+type ClonePrep struct {
+	Host        string `json:"host"`
+	Fingerprint string `json:"fingerprint"`
+	Known       bool   `json:"known"`
+}
+
+// PrepareClone captures the server host key of a git SSH URL and reports
+// whether it is already trusted. It never touches the store.
+func (g *GUI) PrepareClone(url string) (ClonePrep, error) {
+	hostport, err := g.core.CloneHostport(strings.TrimSpace(url))
+	if err != nil {
+		return ClonePrep{}, err
+	}
+	pub, known, err := g.core.HostCheck(hostport)
+	if err != nil {
+		if strings.Contains(err.Error(), "host key changed") {
+			return ClonePrep{}, fmt.Errorf("SSH host key CHANGED for %s - possible attack; refusing to trust automatically", sshx.NormalizeHost(hostport))
+		}
+		return ClonePrep{}, err
+	}
+	return ClonePrep{
+		Host:        hostport,
+		Fingerprint: sshx.HostKeyFingerprint(pub),
+		Known:       known,
+	}, nil
+}
+
+// TrustHost records the just-probed host key as trusted.
+func (g *GUI) TrustHost(hostport string) error {
+	pub, known, err := g.core.HostCheck(hostport)
+	if err != nil {
+		return err
+	}
+	if known {
+		return nil
+	}
+	return g.core.TrustHost(hostport, pub)
+}
+
+// CloneStore clones an SSH git URL into dir (auto-derived when empty) and
+// opens the result as the active store. The host must be trusted first.
+func (g *GUI) CloneStore(url, dir string) error {
+	return g.core.CloneStore(strings.TrimSpace(url), strings.TrimSpace(dir))
+}
+
+// SettingsInfo describes the current environment for the setup screen.
+type SettingsInfo struct {
+	DataDir             string `json:"dataDir"`
+	StorePath           string `json:"storePath"`
+	GitRemote           string `json:"gitRemote"`
+	PGPKeyFingerprint   string `json:"pgpKeyFingerprint"`
+	SSHKeyID            string `json:"sshKeyId"`
+	AutoLockMinutes     int    `json:"autoLockMinutes"`
+	ClipboardClearSeconds int  `json:"clipboardClearSeconds"`
+	GitAuthorName       string `json:"gitAuthorName"`
+	GitAuthorEmail      string `json:"gitAuthorEmail"`
+	HasPGP              bool   `json:"hasPgp"`
+	HasSSH              bool   `json:"hasSsh"`
+}
+
+// SettingsInfo returns a snapshot of the current configuration.
+func (g *GUI) CurrentSettings() SettingsInfo {
+	cfg := g.core.Config()
+	return SettingsInfo{
+		DataDir:               g.core.DataDir(),
+		StorePath:             cfg.StorePath,
+		GitRemote:             cfg.GitRemote,
+		PGPKeyFingerprint:     cfg.PGPKeyFingerprint,
+		SSHKeyID:              cfg.SSHKeyID,
+		AutoLockMinutes:       cfg.AutoLockMinutes,
+		ClipboardClearSeconds: cfg.ClipboardClearSeconds,
+		GitAuthorName:         cfg.GitAuthorName,
+		GitAuthorEmail:        cfg.GitAuthorEmail,
+		HasPGP:                g.core.HasStoredPGPKey(),
+		HasSSH:                g.core.HasStoredSSHKey(),
+	}
+}
+
+// SetAutoLock updates the idle auto-lock timeout (0 disables it).
+func (g *GUI) SetAutoLock(minutes int) error { return g.core.SetAutoLock(minutes) }
+
+// SetClipboardClear updates how long copied secrets stay on the clipboard.
+func (g *GUI) SetClipboardClear(seconds int) error { return g.core.SetClipboardClear(seconds) }
+
+// SetGitAuthor updates the identity used for git commits.
+func (g *GUI) SetGitAuthor(name, email string) error {
+	return g.core.SetGitAuthor(strings.TrimSpace(name), strings.TrimSpace(email))
+}
+
+// Status returns git status text for the active store.
+func (g *GUI) Status() (string, error) { return g.core.Status() }
+
+// Sync performs fetch → pull → push for the active store.
+func (g *GUI) Sync() error { return g.core.Sync() }
+
+// KnownHosts lists previously trusted SSH hosts with fingerprints.
+func (g *GUI) KnownHosts() []string { return g.core.KnownHostsList() }
+
+func (g *GUI) ctxOrNil() context.Context {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.ctx
 }

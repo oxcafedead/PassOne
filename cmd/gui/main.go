@@ -5,7 +5,9 @@ import (
 	"embed"
 	"log"
 	"os"
+	"path/filepath"
 
+	"github.com/getlantern/golog"
 	"github.com/getlantern/systray"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -37,6 +39,13 @@ func main() {
 	}
 	bindApp := NewApp(gui)
 	appBinding = bindApp
+
+	// systray logs through upper-level getlantern/golog, whose error output
+	// defaults to os.Stderr (invisible in a GUI app). Mirror it into our data
+	// directory so tray init failures are diagnosable.
+	if d, derr := os.Create(filepath.Join(gui.DataDir(), "passone.log")); derr == nil {
+		golog.SetOutputs(d, d)
+	}
 
 	// systray runs on its own goroutine; Wails must run on the main goroutine
 	// on Windows or the window is created hidden.
