@@ -291,7 +291,10 @@ func cmdSave(e *env, args []string) error {
 	if err := e.app.SavePassword(pos[0], plaintext); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.stdout, "Saved %s (encrypted, atomic replace).\n", pos[0])
+	if err := e.app.CommitPassword(pos[0]); err != nil {
+		fmt.Fprintf(e.stderr, "warning: encrypted file saved, but commit failed: %v\n", err)
+	}
+	fmt.Fprintf(e.stdout, "Saved %s (encrypted, atomic replace, committed).\n", pos[0])
 	return nil
 }
 
