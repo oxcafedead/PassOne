@@ -4,11 +4,13 @@ import (
 	"context"
 	"embed"
 	"log"
+	"os"
 
 	"github.com/getlantern/systray"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/oxcafedead/passone/internal/ui"
 )
@@ -20,6 +22,14 @@ var assets embed.FS
 var trayIconData []byte
 
 func main() {
+	// Enforce a single instance before anything (tray, window) is created so
+	// a second launch never draws an extra tray icon. The primary instance is
+	// asked to show its window, then this process exits.
+	if !acquireSingleInstance() {
+		activateExistingInstance()
+		os.Exit(0)
+	}
+
 	gui, err := ui.New()
 	if err != nil {
 		log.Fatalf("PassOne: %v", err)
@@ -45,6 +55,16 @@ func main() {
 		BackgroundColour:  &options.RGBA{R: 18, G: 20, B: 26, A: 1},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+		},
+		// Backstop for second-launch races: if the primary instance gets the
+		// WM_COPYDATA before our own guard or through wails itself, re-show it.
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: idSharedWithWailsSingleInstanceLock,
+			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
+				if ctx := globalCtx(); ctx != nil {
+					runtime.WindowShow(ctx)
+				}
+			},
 		},
 		OnStartup: func(ctx context.Context) {
 			setAppContext(ctx)
