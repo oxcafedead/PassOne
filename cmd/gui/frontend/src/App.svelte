@@ -8,6 +8,9 @@
     ShowPassword,
     CopyPassword,
     ClipboardClearSeconds,
+    CreatePassword,
+    UpdatePassword,
+    RemovePassword,
   } from '../wailsjs/go/main/App.js'
   import {EventsOn} from '../wailsjs/runtime/runtime.js'
 
@@ -30,14 +33,38 @@
   let copiedRemaining: number = 0
   let copyTimer: ReturnType<typeof setInterval> | null = null
 
+  type EditingState = {mode: 'add'} | {mode: 'edit'; name: string} | null
+  let editing: EditingState = null
+  let edName: string = ''
+  let edPass: string = ''
+  let edConfirm: string = ''
+  let edBody: string = ''
+  let edBusy: boolean = false
+  let edError: string = ''
+  let armDelete: boolean = false
+  let status: string = ''
+  let statusTimer: ReturnType<typeof setTimeout> | null = null
+
+  function flash(msg: string): void {
+    status = msg
+    if (statusTimer) {
+      clearTimeout(statusTimer)
+    }
+    statusTimer = setTimeout(() => {
+      status = ''
+    }, 4500)
+  }
+
   $: filtered = entries.filter((e) => e.toLowerCase().includes(query.toLowerCase()))
 
   // Tree model derived from the flat entry paths.
-  type Dir = {kind: 'dir'; name: string; path: string; children: Node[]}
+  type Dir = {kind: 'dir'; name: string; path: string; count: number; children: Node[]}
   type File = {kind: 'file'; name: string; path: string}
   type Node = Dir | File
   type Row = {node: Node; depth: number}
 
+  let tree: Node[] = []
+  let rows: Row[] = []
   let expanded = new Set<string>()
   let expandedInitialized = false
 
@@ -53,7 +80,7 @@
         partial = partial ? partial + '/' + parts[i] : parts[i]
         let d = dirs.get(partial)
         if (!d) {
-          d = {kind: 'dir', name: parts[i], path: partial, children: []}
+          d = {kind: 'dir', name: parts[i], path: partial, count: 0, children: []}
           dirs.set(partial, d)
           level.push(d)
         }
@@ -70,7 +97,15 @@
         if (n.kind === 'dir') sortNodes(n.children)
       }
     }
+    const countFiles = (n: Node): number => {
+      if (n.kind === 'file') return 1
+      let c = 0
+      for (const ch of n.children) c += countFiles(ch)
+      n.count = c
+      return c
+    }
     sortNodes(root)
+    for (const n of root) countFiles(n)
     return root
   }
 
@@ -88,22 +123,18 @@
     return out
   }
 
-  function allDirPaths(nodes: Node[], out: string[]): void {
-    for (const n of nodes) {
-      if (n.kind === 'dir') {
-        out.push(n.path)
-        allDirPaths(n.children, out)
+  function expandAll(nodes: Node[]): void {
+    const dirs: string[] = []
+    const collect = (ns: Node[]): void => {
+      for (const n of ns) {
+        if (n.kind === 'dir') {
+          dirs.push(n.path)
+          collect(n.children)
+        }
       }
     }
-  }
-
-  function countsUnder(n: Node): number {
-    if (n.kind === 'file') return 1
-    let c = 0
-    for (const ch of n.children) {
-      c += countsUnder(ch)
-    }
-    return c
+    collect(nodes)
+    expanded = new Set(dirs)
   }
 
   function toggleDir(path: string): void {
@@ -114,10 +145,8 @@
       s.add(path)
     }
     expanded = s
+    rows = buildRows(tree, expanded)
   }
-
-  $: tree = buildTree(entries)
-  $: rendered = buildRows(tree, expanded)
 
   async function load(): Promise<void> {
     try {
@@ -149,12 +178,12 @@
       if (!keep || !entries.includes(keep)) {
         selected = null
       }
+      tree = buildTree(entries)
       if (!expandedInitialized) {
-        const dirs: string[] = []
-        allDirPaths(buildTree(entries), dirs)
-        expanded = new Set(dirs)
+        expandAll(tree)
         expandedInitialized = true
       }
+      rows = buildRows(tree, expanded)
       // A refresh never re-decrypts: the selection stays but the content is
       // hidden again until the user asks for it explicitly.
       detail = ''
@@ -170,6 +199,7 @@
   // hidden until reveal() is invoked explicitly.
   async function select(name: string): Promise<void> {
     error = ''
+    armDelete = false
     if (selected === name) {
       selected = null
       detail = ''
@@ -243,7 +273,107 @@
     revealed = false
     copiedName = null
     error = ''
+    armDelete = false
+    editing = null
+    edError = ''
+    status = ''
     stopCountdown()
+  }
+
+  function openAdd(): void {
+    error = ''
+    armDelete = false
+    edName = ''
+    edPass = ''
+    edConfirm = ''
+    edBody = ''
+    edError = ''
+    editing = {mode: 'add'}
+  }
+
+  function openEdit(): void {
+    if (!selected) {
+      return
+    }
+    error = ''
+    armDelete = false
+    edPass = ''
+    edConfirm = ''
+    edBody = ''
+    edError = ''
+    editing = {mode: 'edit', name: selected}
+  }
+
+  function toggleDeleteArm(): void {
+    if (armDelete) {
+      void deleteEntry()
+    } else {
+      armDelete = true
+    }
+  }
+
+  async function submitEdit(): Promise<void> {
+    if (!editing) {
+      return
+    }
+    edError = ''
+    edBusy = true
+    try {
+      const keepPassword = edPass.trim() === ''
+      if (!keepPassword && edPass !== edConfirm) {
+        edError = 'Passwords do not match'
+        return
+      }
+      if (editing.mode === 'add') {
+        const msg = await CreatePassword(edName.trim(), edPass, edConfirm, edBody)
+        const created = edName.trim()
+        editing = null
+        edName = ''
+        edPass = ''
+        edConfirm = ''
+        edBody = ''
+        flash(msg)
+        await refresh()
+        await select(created)
+      } else {
+        const name = editing.name
+        const msg = await UpdatePassword(name, edPass.trim(), edBody, keepPassword)
+        editing = null
+        edName = ''
+        edPass = ''
+        edConfirm = ''
+        edBody = ''
+        selected = name
+        // Never auto-reveal after an edit: only an explicit Show decrypts.
+        detail = ''
+        revealed = false
+        flash(msg)
+        await refresh()
+      }
+    } catch (e) {
+      edError = String(e)
+    } finally {
+      edBusy = false
+    }
+  }
+
+  async function deleteEntry(): Promise<void> {
+    if (!selected) {
+      return
+    }
+    error = ''
+    armDelete = false
+    try {
+      const gone = selected
+      await RemovePassword(gone)
+      selected = null
+      detail = ''
+      revealed = false
+      flash(gone + ' removed')
+      await refresh()
+    } catch (e) {
+      error = String(e)
+    }
   }
 
   async function submit(): Promise<void> {
@@ -272,6 +402,9 @@
       offLock()
       offUnlock()
       stopCountdown()
+      if (statusTimer) {
+        clearTimeout(statusTimer)
+      }
     }
   })
 </script>
@@ -325,6 +458,15 @@
           class="input min-w-0 flex-1 rounded-lg px-3 py-2 text-sm"
         />
         <button
+          on:click={openAdd}
+          title="Add entry"
+          class="btn-ghost rounded-lg px-2.5 py-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+          </svg>
+        </button>
+        <button
           on:click={refresh}
           title="Refresh list"
           class="btn-ghost rounded-lg px-2.5 py-2"
@@ -365,11 +507,11 @@
               {/each}
             </ul>
           {/if}
-        {:else if rendered.length === 0}
+        {:else if rows.length === 0}
           <p class="text-faint mt-2 px-1 text-xs">No entries</p>
         {:else}
           <ul class="flex flex-col gap-0.5">
-            {#each rendered as row (row.node.path + ':' + row.depth)}
+            {#each rows as row (row.node.kind + ':' + row.node.path + ':' + row.depth)}
               {#if row.node.kind === 'dir'}
                 <li>
                   <button
@@ -384,7 +526,7 @@
                       <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
                     </svg>
                     <span class="text-sub truncate font-medium">{row.node.name}</span>
-                    <span class="text-dim text-ml ml-auto text-xs">{countsUnder(row.node)}</span>
+                    <span class="text-dim text-ml ml-auto text-xs">{row.node.count}</span>
                   </button>
                 </li>
               {:else}
@@ -439,6 +581,26 @@
             </svg>
             {copying ? 'Copying…' : 'Copy'}
           </button>
+          <button
+            on:click={openEdit}
+            title="Edit this entry"
+            class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+            </svg>
+            Edit
+          </button>
+          <button
+            on:click={toggleDeleteArm}
+            title="Delete this entry (asks twice)"
+            class={'btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ' + (armDelete ? 'text-danger' : '')}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>
+            {armDelete ? 'Confirm delete?' : 'Delete'}
+          </button>
         </header>
         {#if error}
           <p class="text-danger text-xs break-words">{error}</p>
@@ -468,4 +630,90 @@
       {/if}
     </section>
   </main>
+
+  {#if editing}
+    <div class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.45)">
+      <form class="panel ring-panel flex w-full max-w-md flex-col gap-3 rounded-xl p-4" on:submit|preventDefault={submitEdit}>
+        <h3 class="text-main text-sm font-semibold">
+          {editing.mode === 'add' ? 'Add entry' : 'Edit entry'}
+        </h3>
+        {#if editing.mode === 'add'}
+          <label class="text-faint flex flex-col gap-1 text-xs">
+            Path
+            <input
+              bind:value={edName}
+              autofocus
+              placeholder="folder/example.com"
+              class="input rounded-lg px-3 py-2 font-mono text-sm"
+            />
+          </label>
+        {:else}
+          <p class="text-faint text-xs break-words">
+            Editing: <span class="text-sub font-mono">{editing.name}</span>
+          </p>
+        {/if}
+        <label class="text-faint flex flex-col gap-1 text-xs">
+          {editing.mode === 'add' ? 'Password' : 'New password (leave empty to keep current)'}
+          <input
+            type="password"
+            bind:value={edPass}
+            autocomplete="new-password"
+            placeholder="••••••••"
+            class="input rounded-lg px-3 py-2 text-sm"
+          />
+        </label>
+        {#if edPass || editing.mode === 'add'}
+          <label class="text-faint flex flex-col gap-1 text-xs">
+            Confirm password
+            <input
+              type="password"
+              bind:value={edConfirm}
+              autocomplete="new-password"
+              placeholder="••••••••"
+              class="input rounded-lg px-3 py-2 text-sm"
+            />
+          </label>
+        {/if}
+        <label class="text-faint flex flex-col gap-1 text-xs">
+          Notes
+          <textarea
+            bind:value={edBody}
+            rows="4"
+            placeholder={editing.mode === 'edit' ? 'Empty keeps current notes' : 'usernames, urls, backup codes…'}
+            class="input rounded-lg px-3 py-2 font-mono text-xs"
+          ></textarea>
+        </label>
+        {#if edError}
+          <p class="text-danger text-xs break-words">{edError}</p>
+        {/if}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            on:click={() => {
+              editing = null
+              edError = ''
+            }}
+            class="btn-ghost rounded-lg px-3 py-2 text-sm"
+          >
+            Cancel
+          </button>
+          <button type="submit" disabled={edBusy} class="btn-accent rounded-lg px-3 py-2 text-sm font-medium">
+            {edBusy
+              ? editing.mode === 'add'
+                ? 'Creating…'
+                : 'Saving…'
+              : editing.mode === 'add'
+                ? 'Create'
+                : 'Save'}
+          </button>
+        </div>
+      </form>
+    </div>
+  {/if}
+{/if}
+
+{#if status}
+  <div class="panel ring-panel text-main fixed right-4 bottom-4 z-50 rounded-lg px-3 py-2 text-sm">
+    {status}
+  </div>
 {/if}

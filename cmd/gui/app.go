@@ -46,6 +46,19 @@ func (a *App) CopyPassword(name string) error { return a.gui.CopyPassword(name) 
 // ClipboardClearSeconds returns how long copied secrets stay on the clipboard.
 func (a *App) ClipboardClearSeconds() int { return a.gui.ClipboardClearSeconds() }
 
+// CreatePassword adds a new password entry.
+func (a *App) CreatePassword(name, password, confirm, body string) (string, error) {
+	return a.gui.CreatePassword(name, password, confirm, body)
+}
+
+// UpdatePassword edits an existing password entry.
+func (a *App) UpdatePassword(name, password, body string, keepPassword bool) (string, error) {
+	return a.gui.UpdatePassword(name, password, body, keepPassword)
+}
+
+// RemovePassword deletes a password entry.
+func (a *App) RemovePassword(name string) error { return a.gui.RemovePassword(name) }
+
 func presence(s string) string {
 	if s == "" {
 		return "(none)"

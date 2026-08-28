@@ -5,6 +5,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -118,4 +119,81 @@ func (g *GUI) CopyPassword(name string) error {
 		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
 	}
 	return nil
+}
+
+// CreatePassword adds a new entry from a form. The name becomes the first
+// plaintext structure (first line password, optional body below). The secret
+// never leaves the Go process beyond the encrypted .gpg file.
+func (g *GUI) CreatePassword(name, password, confirm, body string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("enter a password path")
+	}
+	if strings.HasSuffix(name, "/") || strings.HasSuffix(name, "\\") {
+		return "", errors.New("password path cannot end with a slash")
+	}
+	if password == "" {
+		return "", errors.New("enter a password")
+	}
+	if strings.ContainsAny(password, "\r\n") {
+		return "", errors.New("password cannot contain newlines")
+	}
+	if password != confirm {
+		return "", errors.New("passwords do not match")
+	}
+	exists, err := g.core.PasswordExists(name)
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		return "", fmt.Errorf("already exists: %s (use edit instead)", name)
+	}
+	content := password + "\n" + body
+	packed := []byte(content)
+	defer security.Zero(packed)
+	if err := g.core.SetPassword(name, packed, false); err != nil {
+		return "", err
+	}
+	return "Created " + name, nil
+}
+
+// UpdatePassword edits an existing entry. With keepPassword set the stored
+// first line is preserved and password is ignored (it may be empty); otherwise
+// password replaces it. An empty body is ambiguous with "keep current notes",
+// so a fully empty body always means "do not touch anything".
+func (g *GUI) UpdatePassword(name, password, body string, keepPassword bool) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("enter a password path")
+	}
+	if !keepPassword {
+		if password == "" {
+			return "", errors.New("enter a new password or keep the existing one")
+		}
+		if strings.ContainsAny(password, "\r\n") {
+			return "", errors.New("password cannot contain newlines")
+		}
+	}
+	exists, err := g.core.PasswordExists(name)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("password not found: %s (use add to create it)", name)
+	}
+	if keepPassword && body == "" {
+		return "No changes to " + name, nil
+	}
+	content := password + "\n" + body
+	packed := []byte(content)
+	defer security.Zero(packed)
+	if err := g.core.SetPassword(name, packed, keepPassword); err != nil {
+		return "", err
+	}
+	return "Saved " + name, nil
+}
+
+// RemovePassword deletes a named entry. It decrypts nothing.
+func (g *GUI) RemovePassword(name string) error {
+	return g.core.RemovePassword(strings.TrimSpace(name))
 }

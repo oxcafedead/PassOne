@@ -14,6 +14,10 @@ export function CopyPassword(arg1) {
   return window['go']['main']['App']['CopyPassword'](arg1);
 }
 
+export function CreatePassword(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['CreatePassword'](arg1, arg2, arg3, arg4);
+}
+
 export function IsUnlocked() {
   return window['go']['main']['App']['IsUnlocked']();
 }
@@ -26,10 +30,18 @@ export function Lock() {
   return window['go']['main']['App']['Lock']();
 }
 
+export function RemovePassword(arg1) {
+  return window['go']['main']['App']['RemovePassword'](arg1);
+}
+
 export function ShowPassword(arg1) {
   return window['go']['main']['App']['ShowPassword'](arg1);
 }
 
 export function Unlock(arg1, arg2) {
   return window['go']['main']['App']['Unlock'](arg1, arg2);
+}
+
+export function UpdatePassword(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UpdatePassword'](arg1, arg2, arg3, arg4);
 }

@@ -174,6 +174,23 @@ func (s *Store) WriteEncrypted(p string, ciphertext []byte) error {
 	return nil
 }
 
+// Remove deletes the encrypted .gpg file for password p. Removing a password
+// that does not exist reports an error.
+func (s *Store) Remove(p string) error {
+	full, err := s.relSafe(p)
+	if err != nil {
+		return err
+	}
+	target := full + ".gpg"
+	if err := os.Remove(target); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("password not found: %s", p)
+		}
+		return err
+	}
+	return nil
+}
+
 // Delete removes a password file. It returns os.ErrNotExist behavior wrapped
 // for the caller to distinguish.
 func (s *Store) Delete(p string) error {

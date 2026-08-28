@@ -243,3 +243,87 @@ func TestLockUnlockEventHooks(t *testing.T) {
 		t.Fatal("expected a lock event after idle expiry")
 	}
 }
+
+func TestSetPasswordCreateEditRemove(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatalf("ReadArmoredKeyRing: %v", err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+
+	// Creating a brand-new entry with keepOld must fail.
+	if err := a.SetPassword("fresh", []byte("x"), true); err == nil {
+		t.Fatal("expected keepOld on a missing entry to fail")
+	}
+
+	// Create an entry: first line is the password, rest is the body.
+	if err := a.SetPassword("work/jira", []byte("pass1\nold note\n"), false); err != nil {
+		t.Fatalf("SetPassword create: %v", err)
+	}
+	plain, err := a.ShowPassword("work/jira")
+	if err != nil {
+		t.Fatalf("ShowPassword: %v", err)
+	}
+	if string(plain) != "pass1\nold note\n" {
+		t.Fatalf("created = %q", plain)
+	}
+
+	// Edit with keepOld: password stays, body is replaced.
+	if err := a.SetPassword("work/jira", []byte("new note\n"), true); err != nil {
+		t.Fatalf("SetPassword keepOld: %v", err)
+	}
+	plain, err = a.ShowPassword("work/jira")
+	if err != nil {
+		t.Fatalf("ShowPassword after edit: %v", err)
+	}
+	if string(plain) != "pass1\nnew note\n" {
+		t.Fatalf("edited = %q", plain)
+	}
+
+	// Edit with keepOld and an empty body clears the notes.
+	if err := a.SetPassword("work/jira", []byte(""), true); err != nil {
+		t.Fatalf("SetPassword clear body: %v", err)
+	}
+	plain, err = a.ShowPassword("work/jira")
+	if err != nil {
+		t.Fatalf("ShowPassword after clear: %v", err)
+	}
+	if string(plain) != "pass1\n" {
+		t.Fatalf("cleared = %q", plain)
+	}
+
+	// An empty create (no keepOld) is rejected.
+	if err := a.SetPassword("empty", []byte(""), false); err == nil {
+		t.Fatal("expected empty create to fail")
+	}
+
+	// Remove, list, verify gone.
+	if err := a.RemovePassword("work/jira"); err != nil {
+		t.Fatalf("RemovePassword: %v", err)
+	}
+	if _, err := a.ShowPassword("work/jira"); err == nil {
+		t.Fatal("expected ShowPassword to fail after remove")
+	}
+	listed, err := a.ListPasswords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("ListPasswords after remove = %v", listed)
+	}
+	if err := a.RemovePassword("work/jira"); err == nil {
+		t.Fatal("expected a second remove to fail")
+	}
+}

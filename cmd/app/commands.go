@@ -44,6 +44,7 @@ func commands() map[string]func(*env, []string) error {
 		"copy": cmdCopy,
 		"save": cmdSave,
 		"edit": cmdEdit,
+		"rm":   cmdRemove,
 
 		"status": cmdStatus,
 		"sync":   cmdSync,
@@ -322,6 +323,21 @@ func cmdEdit(e *env, args []string) error {
 		}
 	}
 	fmt.Fprintf(e.stdout, "Saved %s.\n", name)
+	return nil
+}
+
+func cmdRemove(e *env, args []string) error {
+	pos := positional(args)
+	if len(pos) < 1 {
+		return fmt.Errorf("rm requires a password path")
+	}
+	if err := ensureUnlocked(e); err != nil {
+		return err
+	}
+	if err := e.app.RemovePassword(pos[0]); err != nil {
+		return err
+	}
+	fmt.Fprintf(e.stdout, "Removed %s.\n", pos[0])
 	return nil
 }
 

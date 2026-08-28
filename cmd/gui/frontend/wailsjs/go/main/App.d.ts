@@ -7,12 +7,18 @@ export function ClipboardClearSeconds():Promise<number>;
 
 export function CopyPassword(arg1:string):Promise<void>;
 
+export function CreatePassword(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
 export function IsUnlocked():Promise<boolean>;
 
 export function ListPasswords():Promise<Array<string>>;
 
 export function Lock():Promise<void>;
 
+export function RemovePassword(arg1:string):Promise<void>;
+
 export function ShowPassword(arg1:string):Promise<string>;
 
 export function Unlock(arg1:string,arg2:string):Promise<void>;
+
+export function UpdatePassword(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<string>;

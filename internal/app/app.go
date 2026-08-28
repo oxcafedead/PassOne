@@ -531,6 +531,76 @@ func (a *App) CommitPassword(name string) error {
 	return nil
 }
 
+// PasswordExists reports whether the named password is stored. It never touches
+// secret material.
+func (a *App) PasswordExists(name string) (bool, error) {
+	st := a.storePath()
+	if st == nil {
+		return false, errors.New("no password store is open; use 'open' or 'clone' first")
+	}
+	_, err := st.Read(name)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// SetPassword encrypts and writes the named entry. With keepOld set, the first
+// line (the password) of an existing entry is preserved and plaintext replaces
+// the remainder; creating a brand-new entry with keepOld is an error.
+func (a *App) SetPassword(name string, plaintext []byte, keepOld bool) error {
+	if err := a.requireUnlocked(); err != nil {
+		return err
+	}
+	if keepOld {
+		st := a.storePath()
+		if st == nil {
+			return errors.New("no password store is open; use 'open' or 'clone' first")
+		}
+		oldPlain, err := a.ShowPassword(name)
+		if err != nil {
+			if os.IsNotExist(err) || strings.Contains(err.Error(), "password not found") {
+				return fmt.Errorf("password not found: %s", name)
+			}
+			return err
+		}
+		defer security.Zero(oldPlain)
+		oldText := string(oldPlain)
+		var oldPass string
+		if i := strings.IndexByte(oldText, '\n'); i >= 0 {
+			oldPass = oldText[:i]
+		} else {
+			oldPass = oldText
+		}
+		var sb strings.Builder
+		sb.WriteString(oldPass)
+		sb.WriteByte('\n')
+		sb.Write(plaintext)
+		final := []byte(sb.String())
+		defer security.Zero(final)
+		return a.SavePassword(name, final)
+	}
+	if len(plaintext) == 0 {
+		return errors.New("empty password content")
+	}
+	return a.SavePassword(name, plaintext)
+}
+
+// RemovePassword deletes the named password file.
+func (a *App) RemovePassword(name string) error {
+	if err := a.requireUnlocked(); err != nil {
+		return err
+	}
+	st := a.storePath()
+	if st == nil {
+		return errors.New("no password store is open; use 'open' or 'clone' first")
+	}
+	return st.Remove(name)
+}
+
 func (a *App) storePath() *store.Store {
 	a.mu.Lock()
 	defer a.mu.Unlock()

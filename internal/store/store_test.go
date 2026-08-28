@@ -185,3 +185,26 @@ func TestValidateName(t *testing.T) {
 		t.Fatalf("ValidateName normalized = %q", got)
 	}
 }
+
+func TestRemove(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.WriteEncrypted("a/b", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	if err := st.Remove("a/b"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a", "b.gpg")); !os.IsNotExist(err) {
+		t.Fatal("expected file to be gone after Remove")
+	}
+	if err := st.Remove("a/b"); err == nil {
+		t.Fatal("expected a second Remove to fail")
+	}
+	if err := st.Remove("a/../evil"); err == nil {
+		t.Fatal("expected traversal Remove to be rejected")
+	}
+}
