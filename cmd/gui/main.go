@@ -11,6 +11,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/sys/windows/registry"
 
 	"github.com/oxcafedead/passone/internal/ui"
 )
@@ -45,6 +46,11 @@ func main() {
 		systray.Run(trayReady, trayExit)
 	}()
 
+	background := &options.RGBA{R: 18, G: 20, B: 26, A: 1}
+	if windowsUsesLightTheme() {
+		background = &options.RGBA{R: 242, G: 243, B: 246, A: 1}
+	}
+
 	if err := wails.Run(&options.App{
 		Title:            "PassOne",
 		Width:            900,
@@ -52,7 +58,7 @@ func main() {
 		MinWidth:         720,
 		MinHeight:        480,
 		HideWindowOnClose: true,
-		BackgroundColour:  &options.RGBA{R: 18, G: 20, B: 26, A: 1},
+		BackgroundColour:  background,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -86,4 +92,17 @@ func main() {
 	// Wails app ended: tear down the tray (idempotent if already quitting).
 	systray.Quit()
 	<-systrayDone
+}
+
+// windowsUsesLightTheme reports the Windows light/dark app theme from the
+// registry; it controls the window chrome behind the webview at startup. The
+// page itself tracks the system theme live via prefers-color-scheme.
+func windowsUsesLightTheme() bool {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer k.Close()
+	v, _, err := k.GetIntegerValue(`AppsUseLightTheme`)
+	return err == nil && v == 1
 }
