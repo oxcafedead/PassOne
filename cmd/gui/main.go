@@ -61,11 +61,11 @@ func main() {
 	}
 
 	if err := wails.Run(&options.App{
-		Title:            "PassOne",
-		Width:            900,
-		Height:           620,
-		MinWidth:         720,
-		MinHeight:        480,
+		Title:             "PassOne",
+		Width:             900,
+		Height:            620,
+		MinWidth:          720,
+		MinHeight:         480,
 		HideWindowOnClose: true,
 		BackgroundColour:  background,
 		AssetServer: &assetserver.Options{
@@ -111,7 +111,7 @@ func windowsUsesLightTheme() bool {
 	if err != nil {
 		return false
 	}
-	defer k.Close()
+	defer func() { _ = k.Close() }()
 	v, _, err := k.GetIntegerValue(`AppsUseLightTheme`)
 	return err == nil && v == 1
 }

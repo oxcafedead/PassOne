@@ -407,11 +407,6 @@ func (a *App) requireUnlocked() error {
 	return nil
 }
 
-// touch marks activity; it auto-locks if the timeout elapsed.
-func (a *App) touch() error {
-	return a.requireUnlocked()
-}
-
 // startAutoLock uses the configured timeout.
 func (a *App) startAutoLock() {
 	a.mu.Lock()
@@ -934,11 +929,12 @@ func (a *App) Status() (string, error) {
 		fmt.Fprintln(&b, "Working tree: has uncommitted changes")
 	}
 	if state.HasRemote {
-		if state.IsDiverged {
+		switch {
+		case state.IsDiverged:
 			fmt.Fprintln(&b, "Local and remote histories have diverged.")
-		} else if state.Ahead == 0 && state.Behind == 0 {
+		case state.Ahead == 0 && state.Behind == 0:
 			fmt.Fprintln(&b, "In sync with origin.")
-		} else {
+		default:
 			parts := make([]string, 0, 2)
 			if state.Ahead > 0 {
 				parts = append(parts, fmt.Sprintf("%d commit(s) ahead", state.Ahead))

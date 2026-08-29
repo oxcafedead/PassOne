@@ -12,6 +12,7 @@ type App struct {
 	gui *ui.GUI
 }
 
+// NewApp creates the Wails-bound application facade.
 func NewApp(g *ui.GUI) *App { return &App{gui: g} }
 
 // IsUnlocked reports whether decrypted key material is in memory.

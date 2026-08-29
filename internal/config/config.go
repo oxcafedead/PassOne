@@ -81,6 +81,7 @@ type Manager struct {
 	mu    sync.Mutex
 }
 
+// NewManager creates a configuration manager bound to the given paths.
 func NewManager(paths Paths) *Manager {
 	return &Manager{paths: paths}
 }

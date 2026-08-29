@@ -63,7 +63,7 @@ func main() {
 
 	run, ok := commands()[cmd]
 	if !ok {
-		fmt.Fprintf(e.stderr, "unknown command: %s\n\n", cmd)
+		_, _ = fmt.Fprintf(e.stderr, "unknown command: %s\n\n", cmd)
 		printUsage()
 		os.Exit(2)
 	}
@@ -72,10 +72,10 @@ func main() {
 	}
 }
 
-func printUsage() { fmt.Print(usage) }
+func printUsage() { _, _ = fmt.Print(usage) }
 
 func fatal(err error) {
-	fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	_, _ = fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
 }
 

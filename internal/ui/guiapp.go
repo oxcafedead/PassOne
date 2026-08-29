@@ -349,20 +349,20 @@ func (g *GUI) CloneStore(url, dir string) error {
 
 // SettingsInfo describes the current environment for the setup screen.
 type SettingsInfo struct {
-	DataDir             string `json:"dataDir"`
-	StorePath           string `json:"storePath"`
-	GitRemote           string `json:"gitRemote"`
-	PGPKeyFingerprint   string `json:"pgpKeyFingerprint"`
-	SSHKeyID            string `json:"sshKeyId"`
-	AutoLockMinutes     int    `json:"autoLockMinutes"`
-	ClipboardClearSeconds int  `json:"clipboardClearSeconds"`
-	GitAuthorName       string `json:"gitAuthorName"`
-	GitAuthorEmail      string `json:"gitAuthorEmail"`
-	HasPGP              bool   `json:"hasPgp"`
-	HasSSH              bool   `json:"hasSsh"`
+	DataDir               string `json:"dataDir"`
+	StorePath             string `json:"storePath"`
+	GitRemote             string `json:"gitRemote"`
+	PGPKeyFingerprint     string `json:"pgpKeyFingerprint"`
+	SSHKeyID              string `json:"sshKeyId"`
+	AutoLockMinutes       int    `json:"autoLockMinutes"`
+	ClipboardClearSeconds int    `json:"clipboardClearSeconds"`
+	GitAuthorName         string `json:"gitAuthorName"`
+	GitAuthorEmail        string `json:"gitAuthorEmail"`
+	HasPGP                bool   `json:"hasPgp"`
+	HasSSH                bool   `json:"hasSsh"`
 }
 
-// SettingsInfo returns a snapshot of the current configuration.
+// CurrentSettings returns a snapshot of the current configuration.
 func (g *GUI) CurrentSettings() SettingsInfo {
 	cfg := g.core.Config()
 	return SettingsInfo{

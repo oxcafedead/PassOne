@@ -106,15 +106,15 @@ func Status(dir string) (string, error) {
 // RepoState is a snapshot of the local git repository useful for UI status
 // panels.
 type RepoState struct {
-	Branch      string
-	RemoteURL   string
-	Head        string
-	LastCommit  string
-	IsClean     bool
-	Ahead       int
-	Behind      int
-	HasRemote   bool
-	IsDiverged  bool
+	Branch     string
+	RemoteURL  string
+	Head       string
+	LastCommit string
+	IsClean    bool
+	Ahead      int
+	Behind     int
+	HasRemote  bool
+	IsDiverged bool
 }
 
 // GetRepoState collects branch, remote, last commit and ahead/behind counts.

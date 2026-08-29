@@ -8,8 +8,6 @@ import (
 	"github.com/atotto/clipboard"
 )
 
-const clearTick = 250 * time.Millisecond
-
 // Copied writes text to the system clipboard and, when clearSeconds > 0,
 // clears it after that many seconds if it still holds the same value.
 func Copied(text string, clearSeconds int) error {

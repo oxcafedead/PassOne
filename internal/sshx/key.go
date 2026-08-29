@@ -14,7 +14,6 @@ type SSHKey struct {
 	passphrase []byte // preserved while unlocked; zeroed by Lock
 	public     []byte // authorized_keys line (non-secret)
 	algorithm  string
-	comment    string
 }
 
 // ErrUnsupportedKey is returned for key types outside the v1 scope.

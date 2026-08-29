@@ -17,9 +17,9 @@ func launchEditor(initial []byte) ([]byte, error) {
 		return nil, err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(initial); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return nil, err
 	}
 	if err := tmp.Close(); err != nil {

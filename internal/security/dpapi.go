@@ -50,10 +50,12 @@ func (d *dataBlob) free() {
 	if d != nil && d.pbData != nil {
 		// CryptProtectData/CryptUnprotectData allocate the output blob with
 		// LocalAlloc, so it must be released with LocalFree (kernel32).
-		windows.LocalFree(windows.Handle(unsafe.Pointer(d.pbData)))
+		_, _ = windows.LocalFree(windows.Handle(unsafe.Pointer(d.pbData)))
 	}
 }
 
+// Protect seals data with the Windows Data Protection API for the current
+// user session.
 func (p *DPAPIKeyProtector) Protect(data []byte) ([]byte, error) {
 	in := bytesToBlob(data) // points into Go-managed memory: never free
 	var out dataBlob        // allocated by CryptProtectData via LocalAlloc: must free
@@ -76,6 +78,7 @@ func (p *DPAPIKeyProtector) Protect(data []byte) ([]byte, error) {
 	return result, nil
 }
 
+// Unprotect reverses Protect using the Windows Data Protection API.
 func (p *DPAPIKeyProtector) Unprotect(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("no data to unprotect")

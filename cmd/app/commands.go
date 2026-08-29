@@ -26,6 +26,14 @@ func createApp() (*app.App, error) {
 	return app.New()
 }
 
+// print helpers swallow write errors to stdout/stderr; in a CLI there is no
+// useful recovery when the output stream is broken.
+func (e *env) printf(format string, a ...any)  { _, _ = fmt.Fprintf(e.stdout, format, a...) }
+func (e *env) println(a ...any)                { _, _ = fmt.Fprintln(e.stdout, a...) }
+func (e *env) print(a ...any)                  { _, _ = fmt.Fprint(e.stdout, a...) }
+func (e *env) eprintf(format string, a ...any) { _, _ = fmt.Fprintf(e.stderr, format, a...) }
+func (e *env) eprint(a ...any)                 { _, _ = fmt.Fprint(e.stderr, a...) }
+
 func commands() map[string]func(*env, []string) error {
 	return map[string]func(*env, []string) error{
 		"help": func(e *env, _ []string) error { printUsage(); return nil },
@@ -57,7 +65,7 @@ func commands() map[string]func(*env, []string) error {
 }
 
 func cmdInit(e *env, _ []string) error {
-	fmt.Fprintf(e.stdout, "Application data directory: %s\n", e.app.DataDir())
+	e.printf("Application data directory: %s\n", e.app.DataDir())
 	return nil
 }
 
@@ -72,13 +80,13 @@ func cmdImportPGP(e *env, args []string) error {
 	}
 	defer zero(block)
 
-	fmt.Fprintln(e.stdout, "Parsing key...")
+	e.println("Parsing key...")
 	infos, err := e.app.ImportPGPKey(block, readPassphrase(e, "OpenPGP key passphrase: "))
 	if err != nil {
 		return err
 	}
 	printKeyInfos(e, infos)
-	fmt.Fprintln(e.stdout, "Key imported and stored locally (sealed with the application key).")
+	e.println("Key imported and stored locally (sealed with the application key).")
 	return nil
 }
 
@@ -97,8 +105,8 @@ func cmdImportSSH(e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(e.stdout, "SSH key imported:\n  algorithm: %s\n  fingerprint: %s\n", k.Algorithm(), k.Fingerprint())
-	fmt.Fprintln(e.stdout, "Stored locally (sealed with the application key).")
+	e.printf("SSH key imported:\n  algorithm: %s\n  fingerprint: %s\n", k.Algorithm(), k.Fingerprint())
+	e.println("Stored locally (sealed with the application key).")
 	return nil
 }
 
@@ -111,7 +119,7 @@ func cmdPublicKey(e *env, _ []string) error {
 		return err
 	}
 	defer zero(pub)
-	fmt.Fprint(e.stdout, string(pub))
+	e.print(string(pub))
 	return nil
 }
 
@@ -143,7 +151,7 @@ func cmdClone(e *env, args []string) error {
 	if err := e.app.CloneStore(url, dir); err != nil {
 		return err
 	}
-	fmt.Fprintln(e.stdout, "Store cloned and opened.")
+	e.println("Store cloned and opened.")
 	return nil
 }
 
@@ -159,22 +167,22 @@ func cmdTestSSH(e *env, args []string) error {
 	if err := ensureHostTrusted(e, sshx.NormalizeHost(hostport)); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.stdout, "Authenticating to %s ...\n", hostport)
+	e.printf("Authenticating to %s ...\n", hostport)
 	if err := e.app.TestSSH(hostport); err != nil {
 		return fmt.Errorf("SSH authentication failed: %w", err)
 	}
-	fmt.Fprintln(e.stdout, "SSH authentication succeeded.")
+	e.println("SSH authentication succeeded.")
 	return nil
 }
 
 func cmdKnownHosts(e *env, _ []string) error {
 	lines := e.app.KnownHostsList()
 	if len(lines) == 0 {
-		fmt.Fprintln(e.stdout, "No trusted SSH hosts yet.")
+		e.println("No trusted SSH hosts yet.")
 		return nil
 	}
 	for _, l := range lines {
-		fmt.Fprintln(e.stdout, l)
+		e.println(l)
 	}
 	return nil
 }
@@ -190,7 +198,7 @@ func cmdList(e *env, args []string) error {
 	}
 	for _, p := range passwords {
 		if prefix == "" || strings.HasPrefix(p, prefix) {
-			fmt.Fprintln(e.stdout, p)
+			e.println(p)
 		}
 	}
 	return nil
@@ -214,17 +222,17 @@ func cmdShow(e *env, args []string) error {
 
 func printPlaintext(e *env, plaintext []byte, full bool) error {
 	if full {
-		fmt.Fprint(e.stdout, string(plaintext))
+		e.print(string(plaintext))
 		if len(plaintext) == 0 || plaintext[len(plaintext)-1] != '\n' {
-			fmt.Fprintln(e.stdout)
+			e.println()
 		}
 		return nil
 	}
 	text := string(plaintext)
 	if i := strings.IndexByte(text, '\n'); i >= 0 {
-		fmt.Fprintln(e.stdout, text[:i])
+		e.println(text[:i])
 	} else {
-		fmt.Fprintln(e.stdout, text)
+		e.println(text)
 	}
 	return nil
 }
@@ -251,7 +259,7 @@ func cmdCopy(e *env, args []string) error {
 	if err := cliputil.Copied(text, clearSeconds); err != nil {
 		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
 	}
-	fmt.Fprintf(e.stdout, "Password copied to clipboard for %d seconds.\n", clearSeconds)
+	e.printf("Password copied to clipboard for %d seconds.\n", clearSeconds)
 	return nil
 }
 
@@ -278,9 +286,9 @@ func cmdSave(e *env, args []string) error {
 		return err
 	}
 	if err := e.app.CommitPassword(pos[0]); err != nil {
-		fmt.Fprintf(e.stderr, "warning: encrypted file saved, but commit failed: %v\n", err)
+		e.eprintf("warning: encrypted file saved, but commit failed: %v\n", err)
 	}
-	fmt.Fprintf(e.stdout, "Saved %s (encrypted, atomic replace, committed).\n", pos[0])
+	e.printf("Saved %s (encrypted, atomic replace, committed).\n", pos[0])
 	return nil
 }
 
@@ -311,7 +319,7 @@ func cmdEdit(e *env, args []string) error {
 	defer zero(newPlaintext)
 
 	if oldPlaintext != nil && string(newPlaintext) == string(oldPlaintext) {
-		fmt.Fprintln(e.stdout, "No changes to edit.")
+		e.println("No changes to edit.")
 		return nil
 	}
 	if err := e.app.SavePassword(name, newPlaintext); err != nil {
@@ -319,10 +327,10 @@ func cmdEdit(e *env, args []string) error {
 	}
 	if !hasFlag(args, "--no-commit") {
 		if err := e.app.CommitPassword(name); err != nil {
-			fmt.Fprintf(e.stderr, "warning: encrypted file saved, but commit failed: %v\n", err)
+			e.eprintf("warning: encrypted file saved, but commit failed: %v\n", err)
 		}
 	}
-	fmt.Fprintf(e.stdout, "Saved %s.\n", name)
+	e.printf("Saved %s.\n", name)
 	return nil
 }
 
@@ -337,7 +345,7 @@ func cmdRemove(e *env, args []string) error {
 	if err := e.app.RemovePassword(pos[0]); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.stdout, "Removed %s.\n", pos[0])
+	e.printf("Removed %s.\n", pos[0])
 	return nil
 }
 
@@ -347,10 +355,10 @@ func cmdStatus(e *env, _ []string) error {
 		return err
 	}
 	if strings.TrimSpace(st) == "" {
-		fmt.Fprintln(e.stdout, "working tree clean")
+		e.println("working tree clean")
 		return nil
 	}
-	fmt.Fprint(e.stdout, st)
+	e.print(st)
 	return nil
 }
 
@@ -362,13 +370,13 @@ func cmdSync(e *env, _ []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(e.stdout, msg)
+	e.println(msg)
 	return nil
 }
 
 func cmdUnlock(e *env, _ []string) error {
 	if e.app.IsUnlocked() {
-		fmt.Fprintln(e.stdout, "Already unlocked.")
+		e.println("Already unlocked.")
 		return nil
 	}
 	return unlockPrompt(e)
@@ -376,33 +384,33 @@ func cmdUnlock(e *env, _ []string) error {
 
 func cmdLock(e *env, _ []string) error {
 	e.app.Lock()
-	fmt.Fprintln(e.stdout, "Locked.")
+	e.println("Locked.")
 	return nil
 }
 
 func cmdState(e *env, _ []string) error {
 	cfg := e.app.Config()
-	fmt.Fprintf(e.stdout, "Unlocked:         %v\n", e.app.IsUnlocked())
-	fmt.Fprintf(e.stdout, "Store:            %s\n", orNone(cfg.StorePath))
-	fmt.Fprintf(e.stdout, "Git remote:       %s\n", orNone(cfg.GitRemote))
-	fmt.Fprintf(e.stdout, "PGP fingerprint:  %s\n", orNone(cfg.PGPKeyFingerprint))
-	fmt.Fprintf(e.stdout, "SSH key id:       %s\n", orNone(cfg.SSHKeyID))
-	fmt.Fprintf(e.stdout, "Auto-lock:        %d min\n", cfg.AutoLockMinutes)
-	fmt.Fprintf(e.stdout, "Clipboard clear:  %d s\n", cfg.ClipboardClearSeconds)
-	fmt.Fprintf(e.stdout, "Data dir:         %s\n", e.app.DataDir())
+	e.printf("Unlocked:         %v\n", e.app.IsUnlocked())
+	e.printf("Store:            %s\n", orNone(cfg.StorePath))
+	e.printf("Git remote:       %s\n", orNone(cfg.GitRemote))
+	e.printf("PGP fingerprint:  %s\n", orNone(cfg.PGPKeyFingerprint))
+	e.printf("SSH key id:       %s\n", orNone(cfg.SSHKeyID))
+	e.printf("Auto-lock:        %d min\n", cfg.AutoLockMinutes)
+	e.printf("Clipboard clear:  %d s\n", cfg.ClipboardClearSeconds)
+	e.printf("Data dir:         %s\n", e.app.DataDir())
 	return nil
 }
 
 func cmdConfig(e *env, _ []string) error {
 	cfg := e.app.Config()
-	fmt.Fprintf(e.stdout, "storePath             = %q\n", cfg.StorePath)
-	fmt.Fprintf(e.stdout, "gitRemote             = %q\n", cfg.GitRemote)
-	fmt.Fprintf(e.stdout, "sshKeyId              = %q\n", cfg.SSHKeyID)
-	fmt.Fprintf(e.stdout, "pgpKeyFingerprint     = %q\n", cfg.PGPKeyFingerprint)
-	fmt.Fprintf(e.stdout, "autoLockMinutes       = %d\n", cfg.AutoLockMinutes)
-	fmt.Fprintf(e.stdout, "clipboardClearSeconds = %d\n", cfg.ClipboardClearSeconds)
-	fmt.Fprintf(e.stdout, "gitAuthorName         = %q\n", cfg.GitAuthorName)
-	fmt.Fprintf(e.stdout, "gitAuthorEmail        = %q\n", cfg.GitAuthorEmail)
+	e.printf("storePath             = %q\n", cfg.StorePath)
+	e.printf("gitRemote             = %q\n", cfg.GitRemote)
+	e.printf("sshKeyId              = %q\n", cfg.SSHKeyID)
+	e.printf("pgpKeyFingerprint     = %q\n", cfg.PGPKeyFingerprint)
+	e.printf("autoLockMinutes       = %d\n", cfg.AutoLockMinutes)
+	e.printf("clipboardClearSeconds = %d\n", cfg.ClipboardClearSeconds)
+	e.printf("gitAuthorName         = %q\n", cfg.GitAuthorName)
+	e.printf("gitAuthorEmail        = %q\n", cfg.GitAuthorEmail)
 	return nil
 }
 
@@ -497,14 +505,14 @@ func unlockPrompt(e *env) error {
 }
 
 func readPassphrase(e *env, prompt string) []byte {
-	fmt.Fprint(e.stderr, prompt)
+	e.eprint(prompt)
 	if term.IsTerminal(int(syscall.Stdin)) {
 		p, err := term.ReadPassword(int(syscall.Stdin))
 		if err != nil {
-			fmt.Fprintln(e.stdout)
+			e.println()
 			return nil
 		}
-		fmt.Fprintln(e.stdout)
+		e.println()
 		return p
 	}
 	r := bufio.NewReader(e.stdin)
@@ -528,11 +536,11 @@ func ensureHostTrusted(e *env, hostport string) error {
 		return err
 	}
 	if known {
-		fmt.Fprintf(e.stdout, "Host key for %s already verified (%s %s).\n",
+		e.printf("Host key for %s already verified (%s %s).\n",
 			sshx.NormalizeHost(hostport), sshx.KeyAlgorithm(pub), sshx.HostKeyFingerprint(pub))
 		return nil
 	}
-	fmt.Fprintf(e.stdout, "\nUnknown SSH host %s\n\n  algorithm:   %s\n  fingerprint: %s\n\n",
+	e.printf("\nUnknown SSH host %s\n\n  algorithm:   %s\n  fingerprint: %s\n\n",
 		sshx.NormalizeHost(hostport), sshx.KeyAlgorithm(pub), sshx.HostKeyFingerprint(pub))
 	ok, err := askYesNo(e, "Trust this host key? [y/N] ")
 	if err != nil {
@@ -544,12 +552,12 @@ func ensureHostTrusted(e *env, hostport string) error {
 	if err := e.app.TrustHost(hostport, pub); err != nil {
 		return err
 	}
-	fmt.Fprintln(e.stdout, "Host key recorded.")
+	e.println("Host key recorded.")
 	return nil
 }
 
 func askYesNo(e *env, prompt string) (bool, error) {
-	fmt.Fprint(e.stderr, prompt)
+	e.eprint(prompt)
 	r := bufio.NewReader(e.stdin)
 	line, err := r.ReadString('\n')
 	if err != nil {
@@ -581,9 +589,9 @@ func gitHost(url string) string {
 
 func printKeyInfos(e *env, infos []*pgp.KeyInfo) {
 	for _, info := range infos {
-		fmt.Fprintf(e.stdout, "  fingerprint: %s\n", info.Fingerprint)
+		e.printf("  fingerprint: %s\n", info.Fingerprint)
 		for _, uid := range info.UserIDs {
-			fmt.Fprintf(e.stdout, "  user id:     %s\n", uid)
+			e.printf("  user id:     %s\n", uid)
 		}
 	}
 }

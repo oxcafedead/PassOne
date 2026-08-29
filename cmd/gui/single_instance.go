@@ -18,8 +18,8 @@ const idSharedWithWailsSingleInstanceLock = "com.oxcafedead.passone"
 // wails-app-<UniqueId>-siw with class -sic and reuses WM_COPYDATA with
 // dwData = 1542 to deliver SecondInstanceData to the primary instance.
 const (
-	wailsEventClass = "wails-app-" + idSharedWithWailsSingleInstanceLock + "-sic"
-	wailsEventWnd   = "wails-app-" + idSharedWithWailsSingleInstanceLock + "-siw"
+	wailsEventClass              = "wails-app-" + idSharedWithWailsSingleInstanceLock + "-sic"
+	wailsEventWnd                = "wails-app-" + idSharedWithWailsSingleInstanceLock + "-siw"
 	singleInstanceWmCopyDataData = 1542
 )
 
@@ -35,21 +35,13 @@ type copyDataStruct struct {
 	lpData uintptr
 }
 
-// singleInstanceMutex keeps the named mutex alive for the process lifetime so
-// later launches detect the running instance.
-var singleInstanceMutex windows.Handle
-
 // acquireSingleInstance serializes app instances. The named mutex lives for
 // the whole process; the second concurrent instance gets ERROR_ALREADY_EXISTS
 // and returns false, after which it must notify the primary instance and exit.
 // The check runs before systray/Wails start so no second tray icon is drawn.
 func acquireSingleInstance() bool {
-	handle, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr("PassOne-single-instance"))
-	if err == windows.ERROR_ALREADY_EXISTS {
-		return false
-	}
-	singleInstanceMutex = handle
-	return true
+	_, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr("PassOne-single-instance"))
+	return err != windows.ERROR_ALREADY_EXISTS
 }
 
 // activateExistingInstance asks the primary instance to show its window. The
@@ -81,5 +73,5 @@ func activateExistingInstance() {
 		cbData: uint32(len(utf16)*2 + 1),
 		lpData: uintptr(unsafe.Pointer(&utf16[0])),
 	}
-	procSendMessageW.Call(hwnd, 0x004A, 0, uintptr(unsafe.Pointer(&cds)))
+	_, _, _ = procSendMessageW.Call(hwnd, 0x004A, 0, uintptr(unsafe.Pointer(&cds)))
 }

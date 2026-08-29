@@ -24,17 +24,7 @@ const testPGPPassphrase = "app-test-pass"
 // PASSONE_DIR env override is restored after the test.
 func newTestApp(t *testing.T) *App {
 	t.Helper()
-	prev, hadPrev := os.LookupEnv("PASSONE_DIR")
-	if err := os.Setenv("PASSONE_DIR", t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if hadPrev {
-			os.Setenv("PASSONE_DIR", prev)
-		} else {
-			os.Unsetenv("PASSONE_DIR")
-		}
-	})
+	t.Setenv("PASSONE_DIR", t.TempDir())
 	a, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)

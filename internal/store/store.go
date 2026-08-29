@@ -65,7 +65,7 @@ func readGPGID(file string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var ids []string
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -168,7 +168,7 @@ func (s *Store) WriteEncrypted(p string, ciphertext []byte) error {
 		return err
 	}
 	if err := config.MoveFile(tmp, target); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil

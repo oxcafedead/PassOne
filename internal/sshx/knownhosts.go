@@ -36,7 +36,7 @@ func NewKnownHostsStore(path string) (*KnownHostsStore, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
