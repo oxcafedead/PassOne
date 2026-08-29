@@ -2,7 +2,10 @@ package app
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	goGit "github.com/go-git/go-git/v5"
 	"github.com/oxcafedead/passone/internal/gitx"
 	"github.com/oxcafedead/passone/internal/store"
+	"golang.org/x/crypto/ssh"
 )
 
 const testPGPPassphrase = "app-test-pass"
@@ -434,5 +438,377 @@ func TestAutoCommitOnSaveAndRemove(t *testing.T) {
 	}
 	if strings.TrimSpace(st) != "" {
 		t.Fatalf("expected clean working tree after RemovePassword, got:\n%s", st)
+	}
+}
+
+func sshTestKey(t *testing.T) []byte {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "unit@example.com")
+	if err != nil {
+		t.Fatalf("MarshalPrivateKey: %v", err)
+	}
+	return pem.EncodeToMemory(block)
+}
+
+func TestAppGetters(t *testing.T) {
+	a := newTestApp(t)
+	if a.DataDir() == "" {
+		t.Fatal("DataDir empty")
+	}
+	if a.HasStoredPGPKey() {
+		t.Fatal("expected no stored PGP key")
+	}
+	if a.HasStoredSSHKey() {
+		t.Fatal("expected no stored SSH key")
+	}
+	if a.PGPKeyFingerprint() != "" {
+		t.Fatal("expected empty fingerprint")
+	}
+	if a.SSHKeyID() != "" {
+		t.Fatal("expected empty SSH key id")
+	}
+	if a.StorePath() != "" {
+		t.Fatal("expected empty store path")
+	}
+}
+
+func TestStoredStores(t *testing.T) {
+	a := newTestApp(t)
+	if stores := a.StoredStores(); len(stores) != 0 {
+		t.Fatalf("StoredStores = %v", stores)
+	}
+
+	// Create a valid store under the app's stores directory.
+	storeName := "my-store"
+	storeDir := filepath.Join(a.paths.StoresDir, storeName)
+	if _, err := store.Create(storeDir, []string{"AABBCCDD"}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	stores := a.StoredStores()
+	if len(stores) != 1 || stores[0] != storeDir {
+		t.Fatalf("StoredStores = %v", stores)
+	}
+}
+
+func TestImportSSHKey(t *testing.T) {
+	a := newTestApp(t)
+	pemBytes := sshTestKey(t)
+	k, err := a.ImportSSHKey(pemBytes, nil)
+	if err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if k.Algorithm() != ssh.KeyAlgoED25519 {
+		t.Fatalf("algorithm = %q", k.Algorithm())
+	}
+	if !a.HasStoredSSHKey() {
+		t.Fatal("expected stored SSH key")
+	}
+	if a.SSHKeyID() == "" {
+		t.Fatal("expected SSH key id to be set")
+	}
+}
+
+func TestUnlockPGPOnly(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.UnlockPGP([]byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("UnlockPGP: %v", err)
+	}
+	if !a.IsUnlocked() {
+		t.Fatal("expected unlocked")
+	}
+	if a.HasSSHKeyLoaded() {
+		t.Fatal("expected no SSH key loaded")
+	}
+}
+
+func TestUnlockSSHOnly(t *testing.T) {
+	a := newTestApp(t)
+	pemBytes := sshTestKey(t)
+	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if err := a.UnlockSSH(nil); err != nil {
+		t.Fatalf("UnlockSSH: %v", err)
+	}
+	if !a.HasSSHKeyLoaded() {
+		t.Fatal("expected SSH key loaded")
+	}
+}
+
+func TestLoadStoredSSHKey(t *testing.T) {
+	a := newTestApp(t)
+	pemBytes := sshTestKey(t)
+	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if err := a.LoadStoredSSHKey(nil); err != nil {
+		t.Fatalf("LoadStoredSSHKey: %v", err)
+	}
+	if !a.HasSSHKeyLoaded() {
+		t.Fatal("expected SSH key loaded")
+	}
+}
+
+func TestSSHPublicKey(t *testing.T) {
+	a := newTestApp(t)
+	pemBytes := sshTestKey(t)
+	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if err := a.UnlockSSH(nil); err != nil {
+		t.Fatalf("UnlockSSH: %v", err)
+	}
+	pub, err := a.SSHPublicKey()
+	if err != nil {
+		t.Fatalf("SSHPublicKey: %v", err)
+	}
+	if len(pub) == 0 {
+		t.Fatal("expected public key")
+	}
+}
+
+func TestPasswordExists(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
+	exists, err := a.PasswordExists("missing")
+	if err != nil {
+		t.Fatalf("PasswordExists: %v", err)
+	}
+	if exists {
+		t.Fatal("expected missing password not to exist")
+	}
+	if err := a.SavePassword("existing", []byte("secret\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	exists, err = a.PasswordExists("existing")
+	if err != nil {
+		t.Fatalf("PasswordExists: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected existing password to exist")
+	}
+}
+
+func TestCommitPassword(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := goGit.PlainInit(storeDir, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := a.SavePassword("site", []byte("secret\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	// SavePassword auto-committed; CommitPassword should be a no-op (up to date).
+	if err := a.CommitPassword("site"); err != nil {
+		t.Fatalf("CommitPassword: %v", err)
+	}
+}
+
+func TestRemovePasswordNotFound(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := a.RemovePassword("missing"); err == nil {
+		t.Fatal("expected RemovePassword of missing entry to fail")
+	}
+}
+
+func TestKeyNeedsPassphrase(t *testing.T) {
+	a := newTestApp(t)
+
+	// No keys stored -> false, nil.
+	need, err := a.PGPKeyNeedsPassphrase()
+	if err != nil {
+		t.Fatalf("PGPKeyNeedsPassphrase: %v", err)
+	}
+	if need {
+		t.Fatal("expected false with no PGP key")
+	}
+	need, err = a.SSHKeyNeedsPassphrase()
+	if err != nil {
+		t.Fatalf("SSHKeyNeedsPassphrase: %v", err)
+	}
+	if need {
+		t.Fatal("expected false with no SSH key")
+	}
+
+	// Import an unencrypted SSH key -> false.
+	pemBytes := sshTestKey(t)
+	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	need, err = a.SSHKeyNeedsPassphrase()
+	if err != nil {
+		t.Fatalf("SSHKeyNeedsPassphrase: %v", err)
+	}
+	if need {
+		t.Fatal("expected unencrypted SSH key not to require passphrase")
+	}
+
+	// Import a passphrase-protected PGP key -> true.
+	armored := armoredTestKey(t)
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	need, err = a.PGPKeyNeedsPassphrase()
+	if err != nil {
+		t.Fatalf("PGPKeyNeedsPassphrase: %v", err)
+	}
+	if !need {
+		t.Fatal("expected passphrase-protected PGP key to require passphrase")
+	}
+}
+
+func TestStatusWithoutRemote(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := goGit.PlainInit(storeDir, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitx.Add(storeDir, ".gpg-id"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.Commit(storeDir, "init", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatal(err)
+	}
+	status, err := a.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !strings.Contains(status, "No remote configured") {
+		t.Fatalf("Status = %q", status)
+	}
+}
+
+func TestCloneHostportAndGitHost(t *testing.T) {
+	a := newTestApp(t)
+
+	hp, err := a.CloneHostport("ssh://git@github.com/user/pass.git")
+	if err != nil {
+		t.Fatalf("CloneHostport: %v", err)
+	}
+	if hp != "github.com:22" {
+		t.Fatalf("CloneHostport = %q", hp)
+	}
+
+	cases := map[string]string{
+		"git@github.com:user/pass.git":                 "github.com",
+		"ssh://git@github.com/user/pass.git":           "github.com",
+		"git@git.example.com:2222/user/pass-store.git": "git.example.com",
+		"not-a-url": "not-a-url",
+	}
+	for in, want := range cases {
+		if got := gitHostFromURL(in); got != want {
+			t.Fatalf("gitHostFromURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestTrustHostAndKnownHosts(t *testing.T) {
+	a := newTestApp(t)
+	_, pub, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := signer.PublicKey()
+	if err := a.TrustHost("github.com", key); err != nil {
+		t.Fatalf("TrustHost: %v", err)
+	}
+	list := a.KnownHostsList()
+	if len(list) != 1 {
+		t.Fatalf("KnownHostsList = %v", list)
 	}
 }

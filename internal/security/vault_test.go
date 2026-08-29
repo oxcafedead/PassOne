@@ -117,3 +117,106 @@ func TestVaultStoreLoad(t *testing.T) {
 func readWhole(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
+
+func TestVaultKeyPath(t *testing.T) {
+	paths := config.PathsFromBase(t.TempDir())
+	v, err := OpenVault(paths)
+	if err != nil {
+		t.Fatalf("OpenVault: %v", err)
+	}
+	defer v.Wipe()
+	if v.KeyPath() != paths.AppKeyFile {
+		t.Fatalf("KeyPath = %q", v.KeyPath())
+	}
+}
+
+func TestVaultOpenRejectsBadKeyLength(t *testing.T) {
+	paths := config.PathsFromBase(t.TempDir())
+	p := &DPAPIKeyProtector{}
+	bad := []byte("short") // 5 bytes, not 32
+	sealed, err := p.Protect(bad)
+	if err != nil {
+		t.Fatalf("Protect: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.AppKeyFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.AppKeyFile, sealed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenVault(paths); err == nil {
+		t.Fatal("expected OpenVault to reject a key of the wrong length")
+	}
+}
+
+func TestNilVault(t *testing.T) {
+	var v *Vault
+	v.Wipe() // should not panic
+	if _, err := v.Seal([]byte("x")); err == nil {
+		t.Fatal("expected Seal on nil vault to fail")
+	}
+	if _, err := v.Open([]byte("x")); err == nil {
+		t.Fatal("expected Open on nil vault to fail")
+	}
+}
+
+func TestVaultSealOpenEdgeCases(t *testing.T) {
+	paths := config.PathsFromBase(t.TempDir())
+	v, err := OpenVault(paths)
+	if err != nil {
+		t.Fatalf("OpenVault: %v", err)
+	}
+	defer v.Wipe()
+
+	// Empty plaintext roundtrip.
+	sealed, err := v.Seal(nil)
+	if err != nil {
+		t.Fatalf("Seal nil: %v", err)
+	}
+	got, err := v.Open(sealed)
+	if err != nil {
+		t.Fatalf("Open nil: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("opened nil = %q", got)
+	}
+
+	// Blob too short to contain a nonce.
+	if _, err := v.Open([]byte{1, 2, 3}); err == nil {
+		t.Fatal("expected opening a too-short blob to fail")
+	}
+}
+
+func TestZero(t *testing.T) {
+	// Empty slice should be a no-op.
+	Zero(nil)
+	Zero([]byte{})
+
+	// Non-empty slice must be overwritten.
+	b := []byte("secret")
+	Zero(b)
+	if bytes.Equal(b, []byte("secret")) {
+		t.Fatal("Zero did not overwrite the buffer")
+	}
+}
+
+func TestDataBlobHelpers(t *testing.T) {
+	if emptyBlob().cbData != 0 || emptyBlob().pbData != nil {
+		t.Fatal("emptyBlob fields should be zero/nil")
+	}
+	bNil := bytesToBlob(nil)
+	bEmpty := bytesToBlob([]byte{})
+	if bNil.cbData != 0 || bNil.pbData != nil {
+		t.Fatal("bytesToBlob(nil) should have zero/nil fields")
+	}
+	if bEmpty.cbData != 0 || bEmpty.pbData != nil {
+		t.Fatal("bytesToBlob(empty) should have zero/nil fields")
+	}
+	var nilBlob *dataBlob
+	if nilBlob.toBytes() != nil {
+		t.Fatal("toBytes on nil blob should return nil")
+	}
+	if emptyBlob().toBytes() != nil {
+		t.Fatal("toBytes on empty blob should return nil")
+	}
+}

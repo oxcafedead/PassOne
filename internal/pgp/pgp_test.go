@@ -3,6 +3,7 @@ package pgp
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -202,4 +203,179 @@ func TestImportPersistedArmor(t *testing.T) {
 		t.Fatalf("ImportSecret after reload: %v", err)
 	}
 	svc.Lock()
+}
+
+func TestNewService(t *testing.T) {
+	svc := New()
+	if svc == nil {
+		t.Fatal("New returned nil")
+	}
+	if len(svc.DescribeOwn()) != 0 {
+		t.Fatal("new service should have no keys")
+	}
+}
+
+func TestDescribeOwn(t *testing.T) {
+	e := newTestEntity(t)
+	svc := &Service{}
+	if _, err := svc.ImportSecret(armorSecret(t, e), []byte("test-pass")); err != nil {
+		t.Fatalf("ImportSecret: %v", err)
+	}
+	infos := svc.DescribeOwn()
+	if len(infos) != 1 {
+		t.Fatalf("DescribeOwn = %d infos", len(infos))
+	}
+	if infos[0].Fingerprint != fingerprintOf(e) {
+		t.Fatalf("fingerprint mismatch: %s", infos[0].Fingerprint)
+	}
+	if infos[0].KeyID != KeyIDOf(e) {
+		t.Fatalf("key id mismatch: %s", infos[0].KeyID)
+	}
+	if infos[0].Algorithm != "RSA" {
+		t.Fatalf("algorithm = %q", infos[0].Algorithm)
+	}
+}
+
+func TestArmoredSecretRoundtrip(t *testing.T) {
+	e := newTestEntity(t)
+	svc := &Service{}
+	if _, err := svc.ImportSecret(armorSecret(t, e), []byte("test-pass")); err != nil {
+		t.Fatalf("ImportSecret: %v", err)
+	}
+	armored, err := svc.ArmoredSecret()
+	if err != nil {
+		t.Fatalf("ArmoredSecret: %v", err)
+	}
+	if len(armored) == 0 {
+		t.Fatal("ArmoredSecret returned empty")
+	}
+	// The re-serialized block must still be unlockable.
+	svc.Lock()
+	if err := svc.Unlock(armored, []byte("test-pass")); err != nil {
+		t.Fatalf("Unlock from ArmoredSecret: %v", err)
+	}
+}
+
+func TestArmoredSecretNoKeys(t *testing.T) {
+	if _, err := (&Service{}).ArmoredSecret(); err == nil {
+		t.Fatal("expected ArmoredSecret to fail with no keys")
+	}
+}
+
+func TestBlockRequiresNoPassphrase(t *testing.T) {
+	// An entity whose private key is not encrypted.
+	e, err := openpgp.NewEntity("Plain Tester", "", "plain@example.com", &packet.Config{})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.PrivateKeyType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SerializePrivate(w, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	need, err := BlockRequiresPassphrase(buf.Bytes())
+	if err != nil {
+		t.Fatalf("BlockRequiresPassphrase: %v", err)
+	}
+	if need {
+		t.Fatal("expected unencrypted block not to require a passphrase")
+	}
+}
+
+func TestSinglePrimaryFingerprint(t *testing.T) {
+	svc := &Service{}
+	if _, err := svc.SinglePrimaryFingerprint(); err == nil {
+		t.Fatal("expected error with no keys")
+	}
+	e := newTestEntity(t)
+	if _, err := svc.ImportSecret(armorSecret(t, e), []byte("test-pass")); err != nil {
+		t.Fatalf("ImportSecret: %v", err)
+	}
+	fp, err := svc.SinglePrimaryFingerprint()
+	if err != nil {
+		t.Fatalf("SinglePrimaryFingerprint: %v", err)
+	}
+	if fp != fingerprintOf(e) {
+		t.Fatalf("fingerprint = %s", fp)
+	}
+}
+
+func TestSinglePrimaryFingerprintMultiple(t *testing.T) {
+	cfg := &packet.Config{}
+	e1, err := openpgp.NewEntity("One", "", "one@example.com", cfg)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	e2, err := openpgp.NewEntity("Two", "", "two@example.com", cfg)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	svc := &Service{entities: []*openpgp.Entity{e1, e2}}
+	if _, err := svc.SinglePrimaryFingerprint(); err == nil {
+		t.Fatal("expected error with multiple keys")
+	}
+}
+
+func TestUserErrorMapping(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"no valid pgp data", "does not contain a valid OpenPGP message"},
+		{"unable to decrypt session key", "unable to decrypt with the configured key"},
+		{"openpgp: invalid data: modification detected", "integrity check"},
+		{"unknown packet type", "malformed or unsupported OpenPGP packets"},
+		{"something else entirely", "unable to decrypt the password"},
+	}
+	for _, tc := range cases {
+		err := userError(errors.New(tc.in))
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("userError(%q) = %q, want substring %q", tc.in, err.Error(), tc.want)
+		}
+	}
+}
+
+func TestUnlockSuccess(t *testing.T) {
+	e := newTestEntity(t)
+	block := armorSecret(t, e)
+	svc := &Service{}
+	if err := svc.Unlock(block, []byte("test-pass")); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if len(svc.entities) != 1 {
+		t.Fatal("expected unlocked entity")
+	}
+}
+
+func TestSetPassphraseNil(t *testing.T) {
+	svc := &Service{passphrase: []byte("old")}
+	svc.setPassphrase(nil)
+	if svc.passphrase != nil {
+		t.Fatal("expected nil passphrase")
+	}
+}
+
+func TestPubKeyAlgoName(t *testing.T) {
+	cases := []struct {
+		algo packet.PublicKeyAlgorithm
+		want string
+	}{
+		{packet.PubKeyAlgoRSA, "RSA"},
+		{packet.PubKeyAlgoEdDSA, "Ed25519"},
+		{packet.PubKeyAlgoECDSA, "ECDSA"},
+		{packet.PubKeyAlgoDSA, "DSA"},
+		{packet.PubKeyAlgoElGamal, "ElGamal"},
+		{packet.PublicKeyAlgorithm(99), "unknown"},
+	}
+	for _, tc := range cases {
+		if got := pubKeyAlgoName(tc.algo); got != tc.want {
+			t.Fatalf("pubKeyAlgoName(%v) = %q, want %q", tc.algo, got, tc.want)
+		}
+	}
 }

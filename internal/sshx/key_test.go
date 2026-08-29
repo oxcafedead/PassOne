@@ -1,12 +1,14 @@
 package sshx
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -103,5 +105,90 @@ func TestFingerprintStable(t *testing.T) {
 	}
 	if k1.Fingerprint() != k2.Fingerprint() {
 		t.Fatal("fingerprint must be deterministic")
+	}
+}
+
+func TestImportPassphraseProtectedKey(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "unit@example.com", []byte("secret"))
+	if err != nil {
+		t.Fatalf("MarshalPrivateKeyWithPassphrase: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(block)
+
+	if _, err := ImportPrivateKey(pemBytes, nil); err == nil {
+		t.Fatal("expected passphrase-protected key to require a passphrase")
+	}
+	k, err := ImportPrivateKey(pemBytes, []byte("secret"))
+	if err != nil {
+		t.Fatalf("ImportPrivateKey with passphrase: %v", err)
+	}
+	if k.Signer() == nil {
+		t.Fatal("expected signer")
+	}
+	k.Lock()
+	if k.Signer() != nil {
+		t.Fatal("expected signer to be nil after Lock")
+	}
+}
+
+func TestPrivateKeyRequiresPassphraseEncrypted(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "unit@example.com", []byte("secret"))
+	if err != nil {
+		t.Fatalf("MarshalPrivateKeyWithPassphrase: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(block)
+
+	need, err := PrivateKeyRequiresPassphrase(pemBytes)
+	if err != nil {
+		t.Fatalf("PrivateKeyRequiresPassphrase: %v", err)
+	}
+	if !need {
+		t.Fatal("expected encrypted key to require passphrase")
+	}
+}
+
+func TestPrivateKeyRequiresPassphraseGarbage(t *testing.T) {
+	need, err := PrivateKeyRequiresPassphrase([]byte("not a key"))
+	if err == nil {
+		t.Fatal("expected garbage to return an error")
+	}
+	if need {
+		t.Fatal("expected need=false for garbage")
+	}
+}
+
+func TestPublicKeyHelpers(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := signer.PublicKey()
+
+	fp := HostKeyFingerprint(pub)
+	if !strings.HasPrefix(fp, "SHA256:") {
+		t.Fatalf("HostKeyFingerprint = %q", fp)
+	}
+	if KeyAlgorithm(pub) != ssh.KeyAlgoED25519 {
+		t.Fatalf("KeyAlgorithm = %q", KeyAlgorithm(pub))
+	}
+	raw := pub.Marshal()
+	parsed, err := ParsePublicKey(raw)
+	if err != nil {
+		t.Fatalf("ParsePublicKey: %v", err)
+	}
+	if !bytes.Equal(parsed.Marshal(), raw) {
+		t.Fatal("ParsePublicKey roundtrip mismatch")
 	}
 }

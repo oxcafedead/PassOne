@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -86,5 +87,35 @@ func TestCallbackFailsClosed(t *testing.T) {
 	}
 	if err := store.Callback()("known-hostonly", nil, hostKey(t)); !errors.Is(err, ErrUnknownHostKey) {
 		t.Fatalf("expected callback to fail for unknown host, got %v", err)
+	}
+}
+
+func TestKnownHostsListSkipsBadLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(path, []byte("bad-line\n\n# comment\ngithub.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDIhz2GK/XCUj4i6Q5yQJNL1Mad6Yhy1hVA0F5Kp8GDK\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewKnownHostsStore(path)
+	if err != nil {
+		t.Fatalf("NewKnownHostsStore: %v", err)
+	}
+	listed := store.List()
+	if len(listed) != 1 {
+		t.Fatalf("List = %v", listed)
+	}
+}
+
+func TestKnownHostsVerifySkipsMalformed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	// A line for the right host but with only one field should be skipped.
+	if err := os.WriteFile(path, []byte("github.com ssh-ed25519\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewKnownHostsStore(path)
+	if err != nil {
+		t.Fatalf("NewKnownHostsStore: %v", err)
+	}
+	if err := store.Verify("github.com", hostKey(t)); !errors.Is(err, ErrUnknownHostKey) {
+		t.Fatalf("expected unknown host, got %v", err)
 	}
 }

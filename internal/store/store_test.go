@@ -208,3 +208,89 @@ func TestRemove(t *testing.T) {
 		t.Fatal("expected traversal Remove to be rejected")
 	}
 }
+
+func TestStoreRoot(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if st.Root() == "" {
+		t.Fatal("Root returned empty")
+	}
+	if !strings.HasSuffix(st.Root(), string(filepath.Separator)+filepath.Base(dir)) {
+		t.Fatalf("Root = %q", st.Root())
+	}
+}
+
+func TestCreateWithoutRecipients(t *testing.T) {
+	if _, err := Create(t.TempDir(), nil); err == nil {
+		t.Fatal("expected Create without recipients to fail")
+	}
+}
+
+func TestWriteEncryptedCreatesParentDirs(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.WriteEncrypted("deep/nested/entry", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "deep", "nested", "entry.gpg")); err != nil {
+		t.Fatalf("expected nested file: %v", err)
+	}
+}
+
+func TestExistsAndDelete(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	exists, err := st.Exists("missing")
+	if err != nil {
+		t.Fatalf("Exists: %v", err)
+	}
+	if exists {
+		t.Fatal("expected Exists false")
+	}
+	if err := st.WriteEncrypted("present", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	exists, err = st.Exists("present")
+	if err != nil {
+		t.Fatalf("Exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected Exists true")
+	}
+	if err := st.Delete("present"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := st.Delete("present"); err == nil {
+		t.Fatal("expected Delete of missing file to report error")
+	}
+}
+
+func TestOpenRejectsBadGPGID(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".gpg-id"), []byte("# only comments\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err != ErrNoGPGID {
+		t.Fatalf("expected ErrNoGPGID, got %v", err)
+	}
+}
+
+func TestReadRejectsInvalidPath(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := st.Read(""); err == nil {
+		t.Fatal("expected empty path to be rejected")
+	}
+}

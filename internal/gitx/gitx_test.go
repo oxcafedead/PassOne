@@ -1,7 +1,10 @@
 package gitx
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
+	"golang.org/x/crypto/ssh"
 )
 
 // The standard file:// transport shells out to a real `git` binary, which the
@@ -380,5 +384,65 @@ func TestRepoStateAheadBehind(t *testing.T) {
 	}
 	if state.Ahead != 0 || state.Behind != 0 {
 		t.Fatalf("expected in sync after push, got ahead=%d behind=%d", state.Ahead, state.Behind)
+	}
+}
+
+// mockSigner implements the sshx.Signer interface for PublicKeys tests.
+type mockSigner struct{ signer ssh.Signer }
+
+func (m *mockSigner) Signer() ssh.Signer { return m.signer }
+
+func TestPublicKeysBuildsAuth(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := PublicKeys("git", &mockSigner{signer: signer}, func(_ string, _ net.Addr, _ ssh.PublicKey) error { return nil })
+	if auth == nil {
+		t.Fatal("PublicKeys returned nil")
+	}
+}
+
+func TestFetchUpToDate(t *testing.T) {
+	name := "repo-fetch"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Fetch(work, nil); !errors.Is(err, ErrUpToDate) {
+		t.Fatalf("expected ErrUpToDate, got %v", err)
+	}
+}
+
+func TestGetRepoStateWithoutRemote(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRel(work, "a.txt", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(work, "init", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := GetRepoState(work)
+	if err != nil {
+		t.Fatalf("GetRepoState: %v", err)
+	}
+	if state.HasRemote {
+		t.Fatal("expected no remote")
+	}
+	if state.Branch == "" {
+		t.Fatal("expected a branch name")
 	}
 }
