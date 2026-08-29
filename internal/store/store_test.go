@@ -294,3 +294,149 @@ func TestReadRejectsInvalidPath(t *testing.T) {
 		t.Fatal("expected empty path to be rejected")
 	}
 }
+
+func TestOpenGPGIDReadError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".gpg-id"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err != ErrNoGPGID {
+		t.Fatalf("expected ErrNoGPGID, got %v", err)
+	}
+}
+
+func TestCreateMkdirAllError(t *testing.T) {
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "parent")
+	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(filepath.Join(parent, "store"), []string{"AA"}); err == nil {
+		t.Fatal("expected MkdirAll error when parent is a file")
+	}
+}
+
+func TestCreateWriteGPGIDError(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	if err := os.Mkdir(storeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-create .gpg-id as a directory so writeGPGID cannot write a file.
+	if err := os.Mkdir(filepath.Join(storeDir, ".gpg-id"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(storeDir, []string{"AA"}); err == nil {
+		t.Fatal("expected writeGPGID error when .gpg-id is a directory")
+	}
+}
+
+func TestWriteEncryptedMkdirAllError(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteEncrypted("a/b", []byte("x")); err == nil {
+		t.Fatal("expected MkdirAll error when parent is a file")
+	}
+}
+
+func TestWriteEncryptedMoveFileError(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	target := filepath.Join(dir, "x.gpg")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteEncrypted("x", []byte("y")); err == nil {
+		t.Fatal("expected MoveFile error when target is a non-empty directory")
+	}
+}
+
+func TestRemoveDirectoryError(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	target := filepath.Join(dir, "x.gpg")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Remove("x"); err == nil {
+		t.Fatal("expected remove error when target is a non-empty directory")
+	}
+}
+
+func TestDeleteDirectoryError(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	target := filepath.Join(dir, "x.gpg")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete("x"); err == nil {
+		t.Fatal("expected delete error when target is a non-empty directory")
+	}
+}
+
+func TestExistsRejectsInvalidPath(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := st.Exists(""); err == nil {
+		t.Fatal("expected empty path to be rejected")
+	}
+	if _, err := st.Exists("../outside"); err == nil {
+		t.Fatal("expected traversal path to be rejected")
+	}
+}
+
+func TestDeleteRejectsInvalidPath(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.Delete(""); err == nil {
+		t.Fatal("expected empty path to be rejected")
+	}
+	if err := st.Delete("../outside"); err == nil {
+		t.Fatal("expected traversal path to be rejected")
+	}
+}
+
+func TestRemoveRejectsInvalidPath(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.Remove(""); err == nil {
+		t.Fatal("expected empty path to be rejected")
+	}
+	if err := st.Remove("../outside"); err == nil {
+		t.Fatal("expected traversal path to be rejected")
+	}
+}

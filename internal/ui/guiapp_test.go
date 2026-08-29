@@ -268,3 +268,172 @@ func TestStoredStores(t *testing.T) {
 		t.Fatalf("StoredStores = %v", stores)
 	}
 }
+
+func setupUnlockedStore(t *testing.T) (*GUI, string) {
+	t.Helper()
+	g := newTestGUI(t)
+	block := armoredPGPKey(t)
+	fp := pgpFingerprint(block)
+	if _, err := g.core.ImportPGPKey(block, []byte(testPassphrase)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if err := os.MkdirAll(storeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storeDir, ".gpg-id"), []byte(fp), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if err := g.Unlock(testPassphrase, ""); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	return g, storeDir
+}
+
+func TestCreatePasswordHappyPath(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	msg, err := g.CreatePassword("site.com", "secret", "secret", "user: alice")
+	if err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	if !strings.Contains(msg, "Created site.com") {
+		t.Fatalf("message = %q", msg)
+	}
+
+	// Duplicate name should fail.
+	if _, err := g.CreatePassword("site.com", "other", "other", ""); err == nil {
+		t.Fatal("expected duplicate name to fail")
+	}
+}
+
+func TestUpdatePasswordHappyPath(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	if _, err := g.CreatePassword("site.com", "old", "old", "notes"); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+
+	msg, err := g.UpdatePassword("site.com", "new", "more notes", false)
+	if err != nil {
+		t.Fatalf("UpdatePassword: %v", err)
+	}
+	if !strings.Contains(msg, "Saved site.com") {
+		t.Fatalf("message = %q", msg)
+	}
+
+	// keepPassword with no body should report no changes.
+	msg, err = g.UpdatePassword("site.com", "", "", true)
+	if err != nil {
+		t.Fatalf("UpdatePassword keep: %v", err)
+	}
+	if !strings.Contains(msg, "No changes") {
+		t.Fatalf("message = %q", msg)
+	}
+
+	// Missing entry should fail.
+	if _, err := g.UpdatePassword("missing", "x", "", false); err == nil {
+		t.Fatal("expected missing entry to fail")
+	}
+}
+
+func TestRemovePassword(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	if _, err := g.CreatePassword("site.com", "secret", "secret", ""); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	if err := g.RemovePassword("site.com"); err != nil {
+		t.Fatalf("RemovePassword: %v", err)
+	}
+	if err := g.RemovePassword("site.com"); err == nil {
+		t.Fatal("expected removing missing entry to fail")
+	}
+}
+
+func TestListShowCopyPassword(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	if _, err := g.CreatePassword("a/b", "line1", "line1", "body\nmore"); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+
+	list, err := g.ListPasswords()
+	if err != nil {
+		t.Fatalf("ListPasswords: %v", err)
+	}
+	if len(list) != 1 || list[0] != "a/b" {
+		t.Fatalf("ListPasswords = %v", list)
+	}
+
+	plain, err := g.ShowPassword("a/b")
+	if err != nil {
+		t.Fatalf("ShowPassword: %v", err)
+	}
+	if !strings.Contains(plain, "line1") {
+		t.Fatalf("ShowPassword = %q", plain)
+	}
+
+	if err := g.CopyPassword("a/b"); err != nil {
+		t.Fatalf("CopyPassword: %v", err)
+	}
+
+	if _, err := g.ShowPassword("missing"); err == nil {
+		t.Fatal("expected ShowPassword missing to fail")
+	}
+	if err := g.CopyPassword("missing"); err == nil {
+		t.Fatal("expected CopyPassword missing to fail")
+	}
+}
+
+func TestDialogNilContext(t *testing.T) {
+	g := newTestGUI(t)
+	if _, err := g.PickPrivateKey(""); err == nil {
+		t.Fatal("expected PickPrivateKey without context to fail")
+	}
+	if _, err := g.PickStoreDir(); err == nil {
+		t.Fatal("expected PickStoreDir without context to fail")
+	}
+}
+
+func TestCloneHelpers(t *testing.T) {
+	g := newTestGUI(t)
+
+	if _, err := g.PrepareClone("not-a-url"); err == nil {
+		t.Fatal("expected PrepareClone invalid URL to fail")
+	}
+	if err := g.TrustHost("bad"); err == nil {
+		t.Fatal("expected TrustHost bad hostport to fail")
+	}
+	if err := g.CloneStore("not-a-url", ""); err == nil {
+		t.Fatal("expected CloneStore invalid URL to fail")
+	}
+}
+
+func TestStatusAndSyncLocalRepo(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	if _, err := g.CreatePassword("x", "p", "p", ""); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+
+	status, err := g.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status == "" {
+		t.Fatal("expected non-empty status")
+	}
+
+	// Sync without a loaded SSH key should fail.
+	if _, err := g.Sync(); err == nil {
+		t.Fatal("expected Sync without SSH key to fail")
+	}
+
+	// Status/Sync without a configured store should fail.
+	g2 := newTestGUI(t)
+	if _, err := g2.Status(); err == nil {
+		t.Fatal("expected Status without store to fail")
+	}
+	if _, err := g2.Sync(); err == nil {
+		t.Fatal("expected Sync without store to fail")
+	}
+}

@@ -353,6 +353,13 @@ func TestUnlockSuccess(t *testing.T) {
 	}
 }
 
+func TestUnlockBadArmor(t *testing.T) {
+	svc := &Service{}
+	if err := svc.Unlock([]byte("not an openpgp block"), []byte("x")); err == nil {
+		t.Fatal("expected bad armor to be rejected")
+	}
+}
+
 func TestSetPassphraseNil(t *testing.T) {
 	svc := &Service{passphrase: []byte("old")}
 	svc.setPassphrase(nil)
@@ -367,8 +374,11 @@ func TestPubKeyAlgoName(t *testing.T) {
 		want string
 	}{
 		{packet.PubKeyAlgoRSA, "RSA"},
+		{packet.PubKeyAlgoRSAEncryptOnly, "RSA"},
+		{packet.PubKeyAlgoRSASignOnly, "RSA"},
 		{packet.PubKeyAlgoEdDSA, "Ed25519"},
 		{packet.PubKeyAlgoECDSA, "ECDSA"},
+		{packet.PubKeyAlgoECDH, "ECDH"},
 		{packet.PubKeyAlgoDSA, "DSA"},
 		{packet.PubKeyAlgoElGamal, "ElGamal"},
 		{packet.PublicKeyAlgorithm(99), "unknown"},
@@ -377,5 +387,180 @@ func TestPubKeyAlgoName(t *testing.T) {
 		if got := pubKeyAlgoName(tc.algo); got != tc.want {
 			t.Fatalf("pubKeyAlgoName(%v) = %q, want %q", tc.algo, got, tc.want)
 		}
+	}
+}
+
+func TestEncryptNoRecipients(t *testing.T) {
+	if _, err := Encrypt([]byte("secret"), nil); err == nil {
+		t.Fatal("expected error with no recipients")
+	}
+}
+
+func TestDecryptWhenLocked(t *testing.T) {
+	svc := &Service{}
+	if _, err := svc.Decrypt([]byte("anything")); err == nil {
+		t.Fatal("expected error when locked")
+	}
+}
+
+func TestDecryptUnencryptedMessage(t *testing.T) {
+	e := newTestEntity(t)
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := e.Serialize(w); err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+
+	svc := &Service{}
+	if _, err := svc.ImportSecret(armorSecret(t, newTestEntity(t)), []byte("test-pass")); err != nil {
+		t.Fatalf("ImportSecret: %v", err)
+	}
+	if _, err := svc.Decrypt(buf.Bytes()); err == nil {
+		t.Fatal("expected error for unencrypted public-key block")
+	}
+}
+
+func TestResolveRecipientsEmptyAndMultipleMissing(t *testing.T) {
+	e := newTestEntity(t)
+	svc := &Service{}
+	if _, err := svc.ImportSecret(armorSecret(t, e), []byte("test-pass")); err != nil {
+		t.Fatalf("ImportSecret: %v", err)
+	}
+
+	// Empty identifiers are skipped; the valid fingerprint still resolves.
+	resolved, err := svc.ResolveRecipients([]string{"", fingerprintOf(e)})
+	if err != nil {
+		t.Fatalf("ResolveRecipients: %v", err)
+	}
+	if len(resolved) != 1 {
+		t.Fatalf("got %d recipients, want 1", len(resolved))
+	}
+
+	if _, err := svc.ResolveRecipients([]string{"missing-one", "missing-two"}); err == nil {
+		t.Fatal("expected error for missing recipients")
+	}
+}
+
+func TestEntityMatchesVariants(t *testing.T) {
+	e := newTestEntity(t)
+	fp := fingerprintOf(e)
+
+	if !entityMatches(e, fp, fp) {
+		t.Fatal("full fingerprint should match")
+	}
+	if !entityMatches(e, fp[len(fp)-16:], fp[len(fp)-16:]) {
+		t.Fatal("long key id suffix should match")
+	}
+	if !entityMatches(e, "UNIT@EXAMPLE.COM", "unit@example.com") {
+		t.Fatal("exact user id match should work")
+	}
+	if !entityMatches(e, "UNIT", "unit") {
+		t.Fatal("substring user id match should work")
+	}
+	if entityMatches(e, "NOPE", "nope") {
+		t.Fatal("non-matching id should not match")
+	}
+}
+
+func TestEntityMatchesScansIdentities(t *testing.T) {
+	cfg := &packet.Config{}
+	e, err := openpgp.NewEntity("First", "", "first@example.com", cfg)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	e.Identities["second@example.com"] = &openpgp.Identity{Name: "second@example.com"}
+
+	if !entityMatches(e, "SECOND", "second") {
+		t.Fatal("should match a later identity when earlier ones do not")
+	}
+}
+
+func TestBlockRequiresPassphraseBadArmor(t *testing.T) {
+	if _, err := BlockRequiresPassphrase([]byte("not an openpgp block")); err == nil {
+		t.Fatal("expected bad armor to error")
+	}
+}
+
+func TestBlockRequiresPassphraseSubkeyEncrypted(t *testing.T) {
+	cfg := &packet.Config{}
+	e, err := openpgp.NewEntity("Subkey Tester", "", "subkey@example.com", cfg)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	if err := e.EncryptPrivateKeys([]byte("sub-pass"), cfg); err != nil {
+		t.Fatalf("EncryptPrivateKeys: %v", err)
+	}
+	// Decrypt the primary key but keep the subkey encrypted.
+	if err := e.PrivateKey.Decrypt([]byte("sub-pass")); err != nil {
+		t.Fatalf("Decrypt primary: %v", err)
+	}
+	if len(e.Subkeys) == 0 {
+		t.Fatal("expected at least one subkey")
+	}
+
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.PrivateKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if err := e.SerializePrivate(w, nil); err != nil {
+		t.Fatalf("SerializePrivate: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+
+	need, err := BlockRequiresPassphrase(buf.Bytes())
+	if err != nil {
+		t.Fatalf("BlockRequiresPassphrase: %v", err)
+	}
+	if !need {
+		t.Fatal("expected subkey-encrypted block to require a passphrase")
+	}
+}
+
+func TestUnlockEntitiesDebugMessage(t *testing.T) {
+	t.Setenv("PASSONE_DEBUG", "1")
+	e := newTestEntity(t)
+	block := armorSecret(t, e)
+	entities, err := readArmoredKeyRing(block)
+	if err != nil {
+		t.Fatalf("readArmoredKeyRing: %v", err)
+	}
+	err = unlockEntities(entities, []byte("wrong-pass"))
+	if err == nil {
+		t.Fatal("expected wrong passphrase to fail")
+	}
+	if !strings.Contains(err.Error(), "passphrase len=") {
+		t.Fatalf("expected debug detail, got %q", err.Error())
+	}
+}
+
+func TestDescribeSortsUserIDs(t *testing.T) {
+	cfg := &packet.Config{}
+	e, err := openpgp.NewEntity("Sort Tester", "", "zebra@example.com", cfg)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	e.Identities["alpha@example.com"] = &openpgp.Identity{Name: "Alpha@example.com"}
+
+	infos := Describe([]*openpgp.Entity{e})
+	if len(infos) != 1 {
+		t.Fatalf("Describe = %d infos", len(infos))
+	}
+	ids := infos[0].UserIDs
+	// Uppercase 'A' (ASCII 65) sorts before uppercase 'S' (83).
+	want := []string{"Alpha@example.com", "Sort Tester <zebra@example.com>"}
+	if len(ids) != 2 || ids[0] != want[0] || ids[1] != want[1] {
+		t.Fatalf("UserIDs = %v, want %v", ids, want)
+	}
+	if !infos[0].HasSecret {
+		t.Fatal("expected HasSecret true")
 	}
 }

@@ -2,6 +2,7 @@ package security
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,20 @@ func TestDPAPIRoundtrip(t *testing.T) {
 	}
 	if _, err := p.Unprotect(nil); err == nil {
 		t.Fatal("expected empty unprotect to fail")
+	}
+}
+
+func TestDPAPIUnprotectInvalidBlob(t *testing.T) {
+	p := &DPAPIKeyProtector{}
+	if _, err := p.Unprotect([]byte("not a valid dpapi blob")); err == nil {
+		t.Fatal("expected Unprotect to fail on an invalid blob")
+	}
+}
+
+func TestDPAPIProtectEmptyInput(t *testing.T) {
+	p := &DPAPIKeyProtector{}
+	if _, err := p.Protect(nil); err == nil {
+		t.Fatal("expected Protect(nil) to fail on Windows DPAPI")
 	}
 }
 
@@ -114,6 +129,70 @@ func TestVaultStoreLoad(t *testing.T) {
 	}
 }
 
+func TestVaultStoreErrors(t *testing.T) {
+	t.Run("nil vault", func(t *testing.T) {
+		var v *Vault
+		if err := v.Store(filepath.Join(t.TempDir(), "x"), []byte("p")); err == nil {
+			t.Fatal("expected Store on nil vault to fail")
+		}
+	})
+	t.Run("mkdir fails", func(t *testing.T) {
+		paths := config.PathsFromBase(t.TempDir())
+		v, err := OpenVault(paths)
+		if err != nil {
+			t.Fatalf("OpenVault: %v", err)
+		}
+		defer v.Wipe()
+		parent := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := v.Store(filepath.Join(parent, "x"), []byte("p")); err == nil {
+			t.Fatal("expected MkdirAll error")
+		}
+	})
+	t.Run("write temp fails", func(t *testing.T) {
+		paths := config.PathsFromBase(t.TempDir())
+		v, err := OpenVault(paths)
+		if err != nil {
+			t.Fatalf("OpenVault: %v", err)
+		}
+		defer v.Wipe()
+		base := t.TempDir()
+		if err := v.Store(filepath.Join(base, "bad:name"), []byte("p")); err == nil {
+			t.Fatal("expected WriteFile error")
+		}
+	})
+	t.Run("atomic move fails", func(t *testing.T) {
+		paths := config.PathsFromBase(t.TempDir())
+		v, err := OpenVault(paths)
+		if err != nil {
+			t.Fatalf("OpenVault: %v", err)
+		}
+		defer v.Wipe()
+		base := t.TempDir()
+		dst := filepath.Join(base, "dst")
+		if err := os.Mkdir(dst, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := v.Store(dst, []byte("p")); err == nil {
+			t.Fatal("expected atomicMove error")
+		}
+	})
+}
+
+func TestVaultLoadSealedMissingFile(t *testing.T) {
+	paths := config.PathsFromBase(t.TempDir())
+	v, err := OpenVault(paths)
+	if err != nil {
+		t.Fatalf("OpenVault: %v", err)
+	}
+	defer v.Wipe()
+	if _, err := v.LoadSealed(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("expected LoadSealed to fail on a missing file")
+	}
+}
+
 func readWhole(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
@@ -146,6 +225,19 @@ func TestVaultOpenRejectsBadKeyLength(t *testing.T) {
 	}
 	if _, err := OpenVault(paths); err == nil {
 		t.Fatal("expected OpenVault to reject a key of the wrong length")
+	}
+}
+
+func TestOpenVaultUnprotectError(t *testing.T) {
+	paths := config.PathsFromBase(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(paths.AppKeyFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.AppKeyFile, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenVault(paths); err == nil {
+		t.Fatal("expected OpenVault to fail on an unprotect error")
 	}
 }
 
@@ -187,6 +279,17 @@ func TestVaultSealOpenEdgeCases(t *testing.T) {
 	}
 }
 
+func TestVaultSealOpenBadKey(t *testing.T) {
+	v := &Vault{key: []byte{1, 2, 3}, protector: &fakeProtector{}}
+	if _, err := v.Seal([]byte("x")); err == nil {
+		t.Fatal("expected Seal to fail with bad key length")
+	}
+	if _, err := v.Open([]byte("x")); err == nil {
+		t.Fatal("expected Open to fail with bad key length")
+	}
+	v.Wipe()
+}
+
 func TestZero(t *testing.T) {
 	// Empty slice should be a no-op.
 	Zero(nil)
@@ -218,5 +321,100 @@ func TestDataBlobHelpers(t *testing.T) {
 	}
 	if emptyBlob().toBytes() != nil {
 		t.Fatal("toBytes on empty blob should return nil")
+	}
+}
+
+// fakeProtector is a test double for KeyProtector.
+type fakeProtector struct {
+	protectErr   error
+	unprotectErr error
+	fixedKey     []byte
+}
+
+func (f *fakeProtector) Protect(data []byte) ([]byte, error) {
+	if f.protectErr != nil {
+		return nil, f.protectErr
+	}
+	return append([]byte("protected:"), data...), nil
+}
+
+func (f *fakeProtector) Unprotect(data []byte) ([]byte, error) {
+	if f.unprotectErr != nil {
+		return nil, f.unprotectErr
+	}
+	if f.fixedKey != nil {
+		return f.fixedKey, nil
+	}
+	if !bytes.HasPrefix(data, []byte("protected:")) {
+		return nil, errors.New("bad blob")
+	}
+	return bytes.TrimPrefix(data, []byte("protected:")), nil
+}
+
+func TestLoadOrCreateAppKeyUnprotectError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.key")
+	if err := os.WriteFile(path, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &fakeProtector{unprotectErr: errors.New("bad blob")}
+	_, err := loadOrCreateAppKey(p, path)
+	if err == nil || !strings.Contains(err.Error(), "unable to unprotect") {
+		t.Fatalf("expected unprotect error, got %v", err)
+	}
+}
+
+func TestLoadOrCreateAppKeyReadError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.key")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := &fakeProtector{}
+	_, err := loadOrCreateAppKey(p, path)
+	if err == nil || !strings.Contains(err.Error(), "unable to read application key") {
+		t.Fatalf("expected read error, got %v", err)
+	}
+}
+
+func TestLoadOrCreateAppKeyProtectError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys", "app.key")
+	p := &fakeProtector{protectErr: errors.New("protect failed")}
+	_, err := loadOrCreateAppKey(p, path)
+	if err == nil || !strings.Contains(err.Error(), "unable to protect") {
+		t.Fatalf("expected protect error, got %v", err)
+	}
+}
+
+func TestLoadOrCreateAppKeyMkdirAllError(t *testing.T) {
+	dir := t.TempDir()
+	keysFile := filepath.Join(dir, "keys")
+	if err := os.WriteFile(keysFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(keysFile, "app.key")
+	p := &fakeProtector{}
+	_, err := loadOrCreateAppKey(p, path)
+	if err == nil {
+		t.Fatal("expected MkdirAll error")
+	}
+}
+
+func TestLoadOrCreateAppKeyWriteFileError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app:key")
+	p := &fakeProtector{}
+	_, err := loadOrCreateAppKey(p, path)
+	if err == nil {
+		t.Fatal("expected WriteFile error")
+	}
+}
+
+func TestLoadOrCreateAppKeyAtomicMoveError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.key")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := &fakeProtector{}
+	_, err := loadOrCreateAppKey(p, path)
+	if err == nil {
+		t.Fatal("expected atomicMove error")
 	}
 }

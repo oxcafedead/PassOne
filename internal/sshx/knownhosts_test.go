@@ -1,11 +1,13 @@
 package sshx
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -117,5 +119,62 @@ func TestKnownHostsVerifySkipsMalformed(t *testing.T) {
 	}
 	if err := store.Verify("github.com", hostKey(t)); !errors.Is(err, ErrUnknownHostKey) {
 		t.Fatalf("expected unknown host, got %v", err)
+	}
+}
+
+func TestParseStoredKeyErrors(t *testing.T) {
+	if _, err := parseStoredKey([]string{"ssh-ed25519"}); err == nil {
+		t.Fatal("expected error for incomplete stored key")
+	}
+	if _, err := parseStoredKey([]string{"ssh-ed25519", "!!!not-base64!!!"}); err == nil {
+		t.Fatal("expected base64 decode error")
+	}
+	if _, err := parseStoredKey([]string{"ssh-ed25519", "aGVsbG8="}); err == nil {
+		t.Fatal("expected parse public key error")
+	}
+}
+
+func TestRecordLineRoundtrip(t *testing.T) {
+	key := hostKey(t)
+	line := recordLine("github.com", key)
+	fields := strings.Fields(line)
+	if len(fields) != 3 {
+		t.Fatalf("recordLine = %q (%d fields)", line, len(fields))
+	}
+	parsed, err := parseStoredKey(fields[1:])
+	if err != nil {
+		t.Fatalf("parseStoredKey: %v", err)
+	}
+	if !bytes.Equal(parsed.Marshal(), key.Marshal()) {
+		t.Fatal("recordLine roundtrip mismatch")
+	}
+}
+
+func TestNewKnownHostsStoreDirectoryPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewKnownHostsStore(path); err == nil {
+		t.Fatal("expected error when known_hosts path is a directory")
+	}
+}
+
+func TestKnownHostsAddWriteError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	defer func() { _ = os.Chmod(path, 0o600) }()
+
+	store, err := NewKnownHostsStore(path)
+	if err != nil {
+		t.Fatalf("NewKnownHostsStore: %v", err)
+	}
+	if err := store.Add("host", hostKey(t)); err == nil {
+		t.Fatal("expected write error on read-only known_hosts file")
 	}
 }

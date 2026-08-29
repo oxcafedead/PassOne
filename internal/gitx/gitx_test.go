@@ -13,6 +13,7 @@ import (
 
 	goGit "github.com/go-git/go-git/v5"
 	goGitConfig "github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
@@ -444,5 +445,611 @@ func TestGetRepoStateWithoutRemote(t *testing.T) {
 	}
 	if state.Branch == "" {
 		t.Fatal("expected a branch name")
+	}
+}
+
+func TestCloneBadURL(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "clone")
+	if err := Clone("gitxtest://nonexistent-repo", target, nil); err == nil {
+		t.Fatal("expected clone from bad URL to fail")
+	}
+}
+
+func TestOpenNotARepo(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Open(dir); err == nil {
+		t.Fatal("expected Open on non-repo to fail")
+	}
+}
+
+func TestRemoteURLNoOrigin(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoteURL(work); err == nil {
+		t.Fatal("expected RemoteURL with no origin to fail")
+	}
+}
+
+func TestStatusNotARepo(t *testing.T) {
+	if _, err := Status(t.TempDir()); err == nil {
+		t.Fatal("expected Status on non-repo to fail")
+	}
+}
+
+func TestStatusDirty(t *testing.T) {
+	name := "repo-dirty"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRel(work, "a.txt", "modified"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Status(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st, "a.txt") {
+		t.Fatalf("expected dirty status for a.txt, got %q", st)
+	}
+}
+
+func TestGetRepoStateBehind(t *testing.T) {
+	name := "repo-behind"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	other := filepath.Join(t.TempDir(), "other")
+	if err := Clone(remoteURL(name), other, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRel(other, "b.txt", "y"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(other, "b.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(other, "add b", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(other, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Fetch(work, nil); err != nil {
+		t.Fatal(err)
+	}
+	state, err := GetRepoState(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Behind != 1 {
+		t.Fatalf("behind = %d, want 1", state.Behind)
+	}
+}
+
+func TestGetRepoStateDiverged(t *testing.T) {
+	work := t.TempDir()
+	repo, err := goGit.PlainInit(work, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRemote(&goGitConfig.RemoteConfig{Name: "origin", URLs: []string{remoteURL("diverged")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeRel(work, "a.txt", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	seedHash, err := Commit(work, "seed", "T", "t@x")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Commit A on master.
+	if err := writeRel(work, "a.txt", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(work, "local", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a divergent commit B from the seed commit on a side branch.
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sideBranch := plumbing.NewBranchReferenceName("remote")
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(sideBranch, plumbing.NewHash(seedHash))); err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.Checkout(&goGit.CheckoutOptions{Branch: sideBranch}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRel(work, "a.txt", "remote"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	bHash, err := Commit(work, "remote", "T", "t@x")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Track the side branch as refs/remotes/origin/master and return to master.
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "master"), plumbing.NewHash(bHash))); err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.Checkout(&goGit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName("master")}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := GetRepoState(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.IsDiverged {
+		t.Fatalf("expected diverged state, got ahead=%d behind=%d", state.Ahead, state.Behind)
+	}
+}
+
+func TestCountCommitsUntilBadHash(t *testing.T) {
+	name := "repo-count-bad"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Open(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = countCommitsUntil(repo, plumbing.NewHash("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"), plumbing.NewHash("0000000000000000000000000000000000000000"))
+	if err == nil {
+		t.Fatal("expected countCommitsUntil to fail with missing hash")
+	}
+}
+
+func TestStatusBareRepo(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Status(work); err == nil {
+		t.Fatal("expected Status on bare repo to fail")
+	}
+}
+
+func TestAddBareRepo(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "x.txt"); err == nil {
+		t.Fatal("expected Add on bare repo to fail")
+	}
+}
+
+func TestCommitBareRepo(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(work, "msg", "T", "t@x"); err == nil {
+		t.Fatal("expected Commit on bare repo to fail")
+	}
+}
+
+func TestGetRepoStateBareRepo(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetRepoState(work); err == nil {
+		t.Fatal("expected GetRepoState on bare repo to fail")
+	}
+}
+
+func TestFetchSuccess(t *testing.T) {
+	name := "repo-fetch-success"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	other := filepath.Join(t.TempDir(), "other")
+	if err := Clone(remoteURL(name), other, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRel(other, "b.txt", "y"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(other, "b.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(other, "add b", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(other, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Fetch(work, nil); err != nil {
+		t.Fatalf("expected fetch to succeed, got %v", err)
+	}
+}
+
+func TestCountCommitsUntilDirect(t *testing.T) {
+	name := "repo-count"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "1"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Open(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := countCommitsUntil(repo, head.Hash(), head.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("count from self = %d, want 0", n)
+	}
+
+	n, err = countCommitsUntil(repo, head.Hash(), plumbing.NewHash("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != -1 {
+		t.Fatalf("count to unreachable hash = %d, want -1", n)
+	}
+
+	if err := writeRel(work, "a.txt", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(work, "second", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+	head, err = repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := repo.CommitObject(commit.ParentHashes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err = countCommitsUntil(repo, head.Hash(), root.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("count head->root = %d, want 1", n)
+	}
+}
+
+func TestFetchNotARepo(t *testing.T) {
+	if err := Fetch(t.TempDir(), nil); err == nil {
+		t.Fatal("expected Fetch on non-repo to fail")
+	}
+}
+
+func TestPullNotARepo(t *testing.T) {
+	if err := Pull(t.TempDir(), nil); err == nil {
+		t.Fatal("expected Pull on non-repo to fail")
+	}
+}
+
+func TestPushNotARepo(t *testing.T) {
+	if err := Push(t.TempDir(), nil); err == nil {
+		t.Fatal("expected Push on non-repo to fail")
+	}
+}
+
+func TestCurrentBranchNotARepo(t *testing.T) {
+	if _, err := CurrentBranch(t.TempDir()); err == nil {
+		t.Fatal("expected CurrentBranch on non-repo to fail")
+	}
+}
+
+func TestGetRepoStateMissingHEAD(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(work, ".git", "HEAD")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetRepoState(work); err == nil {
+		t.Fatal("expected GetRepoState to fail with missing HEAD")
+	}
+}
+
+func TestGetRepoStateRemoteRefMissing(t *testing.T) {
+	work := t.TempDir()
+	repo, err := goGit.PlainInit(work, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRemote(&goGitConfig.RemoteConfig{Name: "origin", URLs: []string{remoteURL("missing-ref")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRel(work, "a.txt", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(work, "init", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := GetRepoState(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.HasRemote {
+		t.Fatal("expected remote to be present")
+	}
+	if state.Ahead != 0 || state.Behind != 0 {
+		t.Fatalf("expected no ahead/behind when remote ref is missing, got ahead=%d behind=%d", state.Ahead, state.Behind)
+	}
+}
+
+func TestFetchBadRemote(t *testing.T) {
+	name := "repo-fetch-bad"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Open(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteRemote("origin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRemote(&goGitConfig.RemoteConfig{Name: "origin", URLs: []string{remoteURL("nope")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Fetch(work, nil); err == nil {
+		t.Fatal("expected Fetch with bad remote to fail")
+	}
+}
+
+func TestPullBadRemote(t *testing.T) {
+	name := "repo-pull-bad"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Open(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteRemote("origin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRemote(&goGitConfig.RemoteConfig{Name: "origin", URLs: []string{remoteURL("nope")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Pull(work, nil); err == nil {
+		t.Fatal("expected Pull with bad remote to fail")
+	}
+}
+
+func TestAddNotARepo(t *testing.T) {
+	if err := Add(t.TempDir(), "x.txt"); err == nil {
+		t.Fatal("expected Add on non-repo to fail")
+	}
+}
+
+func TestRemoveNotARepo(t *testing.T) {
+	if err := Remove(t.TempDir(), "x.txt"); err == nil {
+		t.Fatal("expected Remove on non-repo to fail")
+	}
+}
+
+func TestRemoveMissingFile(t *testing.T) {
+	name := "repo-remove-missing"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(work, "missing.txt"); err == nil {
+		t.Fatal("expected Remove on missing file to fail")
+	}
+}
+
+func TestCommitDefaultAuthor(t *testing.T) {
+	name := "repo-commit-default"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRel(work, "b.txt", "y"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "b.txt"); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := Commit(work, "add b", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash == "" {
+		t.Fatal("expected commit hash")
+	}
+}
+
+func TestPushBadRemote(t *testing.T) {
+	name := "repo-push-bad"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := Open(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteRemote("origin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRemote(&goGitConfig.RemoteConfig{Name: "origin", URLs: []string{remoteURL("nope")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRel(work, "b.txt", "y"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(work, "b.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(work, "add b", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(work, nil); err == nil {
+		t.Fatal("expected Push with bad remote to fail")
+	}
+}
+
+func TestPullUpToDate(t *testing.T) {
+	name := "repo-pull-uptodate"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Pull(work, nil); !errors.Is(err, ErrUpToDate) {
+		t.Fatalf("expected ErrUpToDate, got %v", err)
+	}
+}
+
+func TestPushUpToDate(t *testing.T) {
+	name := "repo-push-uptodate"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := Clone(remoteURL(name), work, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(work, nil); !errors.Is(err, ErrUpToDate) {
+		t.Fatalf("expected ErrUpToDate, got %v", err)
+	}
+}
+
+func TestCloneFileAsDir(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Clone("gitxtest://irrelevant", file, nil); err == nil {
+		t.Fatal("expected Clone to fail when target path is a file")
+	}
+}
+
+func TestCurrentBranchMissingHEAD(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(work, ".git", "HEAD")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CurrentBranch(work); err == nil {
+		t.Fatal("expected CurrentBranch to fail with missing HEAD")
+	}
+}
+
+func TestRemoteURLEmptyURLs(t *testing.T) {
+	work := t.TempDir()
+	if _, err := goGit.PlainInit(work, false); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(work, ".git", "config")
+	if err := os.WriteFile(configPath, []byte("[core]\n\trepositoryformatversion = 0\n\tbare = false\n[remote \"origin\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoteURL(work); err == nil {
+		t.Fatal("expected RemoteURL with empty URLs to fail")
+	}
+}
+
+func TestCurrentBranchDetached(t *testing.T) {
+	name := "repo-detached"
+	makeRemote(t, name)
+	seedRemote(t, name, map[string]string{"a.txt": "x"})
+
+	work := filepath.Join(t.TempDir(), "work")
+	repo, err := goGit.PlainClone(work, false, &goGit.CloneOptions{URL: remoteURL(name)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.Checkout(&goGit.CheckoutOptions{Hash: head.Hash()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CurrentBranch(work); err == nil {
+		t.Fatal("expected CurrentBranch in detached HEAD to fail")
 	}
 }

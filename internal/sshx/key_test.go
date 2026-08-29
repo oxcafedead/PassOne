@@ -165,6 +165,14 @@ func TestPrivateKeyRequiresPassphraseGarbage(t *testing.T) {
 	}
 }
 
+func TestSetPassphraseNil(t *testing.T) {
+	k := &SSHKey{passphrase: []byte("old")}
+	k.setPassphrase(nil)
+	if k.passphrase != nil {
+		t.Fatal("expected passphrase to be nil")
+	}
+}
+
 func TestPublicKeyHelpers(t *testing.T) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

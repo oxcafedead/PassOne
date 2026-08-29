@@ -92,6 +92,34 @@ func TestResolvePathsUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestResolvePathsLocalAppData(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PASSONE_DIR", "")
+	t.Setenv("LOCALAPPDATA", dir)
+	p := ResolvePaths()
+	want := filepath.Join(dir, "PassOne")
+	if p.Base != want {
+		t.Fatalf("ResolvePaths base = %q, want %q", p.Base, want)
+	}
+	if p.ConfigFile != filepath.Join(want, "config.json") {
+		t.Fatalf("ConfigFile = %q", p.ConfigFile)
+	}
+}
+
+func TestResolvePathsFallbackToHome(t *testing.T) {
+	t.Setenv("PASSONE_DIR", "")
+	t.Setenv("LOCALAPPDATA", "")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("UserHomeDir: %v", err)
+	}
+	p := ResolvePaths()
+	want := filepath.Join(home, "AppData", "Local", "PassOne")
+	if p.Base != want {
+		t.Fatalf("ResolvePaths base = %q, want %q", p.Base, want)
+	}
+}
+
 func TestRestrictACLAndMoveFile(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.txt")
@@ -114,6 +142,12 @@ func TestRestrictACLAndMoveFile(t *testing.T) {
 	}
 	if string(data) != "hello" {
 		t.Fatalf("moved content = %q", data)
+	}
+}
+
+func TestRestrictACLError(t *testing.T) {
+	if err := RestrictACL(filepath.Join(t.TempDir(), "does", "not", "exist.txt")); err == nil {
+		t.Fatal("expected RestrictACL to fail on a missing file")
 	}
 }
 
@@ -140,6 +174,22 @@ func TestDirIsEmpty(t *testing.T) {
 	}
 }
 
+func TestDirIsEmptyErrors(t *testing.T) {
+	_, err := DirIsEmpty(filepath.Join(t.TempDir(), "missing"))
+	if err == nil {
+		t.Fatal("expected error for missing directory")
+	}
+
+	f := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = DirIsEmpty(f)
+	if err == nil {
+		t.Fatal("expected error when path is a file")
+	}
+}
+
 func TestManagerLoadMalformedJSON(t *testing.T) {
 	paths := PathsFromBase(t.TempDir())
 	if err := os.WriteFile(paths.ConfigFile, []byte("not json"), 0o600); err != nil {
@@ -148,5 +198,67 @@ func TestManagerLoadMalformedJSON(t *testing.T) {
 	m := NewManager(paths)
 	if _, err := m.Load(); err == nil {
 		t.Fatal("expected Load to fail on malformed JSON")
+	}
+}
+
+func TestManagerLoadReadError(t *testing.T) {
+	paths := PathsFromBase(t.TempDir())
+	if err := os.Mkdir(paths.ConfigFile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewManager(paths).Load()
+	if err == nil {
+		t.Fatal("expected Load to fail when config file is a directory")
+	}
+}
+
+func TestEnsureDirectoriesErrors(t *testing.T) {
+	t.Run("base is file", func(t *testing.T) {
+		base := filepath.Join(t.TempDir(), "base")
+		paths := PathsFromBase(base)
+		if err := os.WriteFile(base, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := NewManager(paths).EnsureDirectories(); err == nil {
+			t.Fatal("expected error when base exists as a file")
+		}
+	})
+	t.Run("keys is file", func(t *testing.T) {
+		paths := PathsFromBase(t.TempDir())
+		if err := os.WriteFile(paths.KeysDir, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := NewManager(paths).EnsureDirectories(); err == nil {
+			t.Fatal("expected error when keys exists as a file")
+		}
+	})
+}
+
+func TestSaveErrors(t *testing.T) {
+	t.Run("ensure directories fails", func(t *testing.T) {
+		base := filepath.Join(t.TempDir(), "base")
+		paths := PathsFromBase(base)
+		if err := os.WriteFile(base, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := NewManager(paths).Save(defaultConfig()); err == nil {
+			t.Fatal("expected Save to fail when base is a file")
+		}
+	})
+	t.Run("write temp fails", func(t *testing.T) {
+		base := t.TempDir()
+		paths := PathsFromBase(base)
+		// The temporary file name is derived from ConfigFile, so an invalid
+		// basename causes the WriteFile call to fail.
+		paths.ConfigFile = filepath.Join(base, "config>.json")
+		if err := NewManager(paths).Save(defaultConfig()); err == nil {
+			t.Fatal("expected Save to fail writing temp file with invalid name")
+		}
+	})
+}
+
+func TestAtomicReplaceError(t *testing.T) {
+	if err := atomicReplace(filepath.Join(t.TempDir(), "missing"), filepath.Join(t.TempDir(), "dst")); err == nil {
+		t.Fatal("expected atomicReplace to fail on a missing source")
 	}
 }
