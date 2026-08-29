@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,16 @@ import (
 )
 
 const testPGPPassphrase = "app-test-pass"
+
+// fileURL returns a RFC 8089 file:// URL for an absolute local path.
+// It works on both Windows (file:///C:/...) and Unix (file:///tmp/...).
+func fileURL(path string) string {
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
+}
 
 // newTestApp returns an App bound to an isolated data directory; the
 // PASSONE_DIR env override is restored after the test.
@@ -1106,7 +1117,7 @@ func TestCloneOrReuse(t *testing.T) {
 		t.Fatalf("Push: %v", err)
 	}
 
-	url := "file://" + filepath.ToSlash(remoteDir)
+	url := fileURL(remoteDir)
 	target := filepath.Join(t.TempDir(), "cloned")
 
 	// First clone creates the directory.
@@ -1270,7 +1281,7 @@ func setupGitStore(t *testing.T, fp string) (storeDir, bareDir string) {
 	}
 
 	storeDir = filepath.Join(t.TempDir(), "store")
-	if err := gitx.Clone("file://"+filepath.ToSlash(bareDir), storeDir, nil); err != nil {
+	if err := gitx.Clone(fileURL(bareDir), storeDir, nil); err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
 	return storeDir, bareDir
@@ -1354,7 +1365,7 @@ func TestSync(t *testing.T) {
 
 	// Remote update -> fetch and pull.
 	other := t.TempDir()
-	if _, err := goGit.PlainClone(other, false, &goGit.CloneOptions{URL: "file://" + filepath.ToSlash(bareDir)}); err != nil {
+	if _, err := goGit.PlainClone(other, false, &goGit.CloneOptions{URL: fileURL(bareDir)}); err != nil {
 		t.Fatalf("PlainClone other: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(other, "remote.txt"), []byte("remote\n"), 0o600); err != nil {
@@ -1495,7 +1506,7 @@ func TestStatusComprehensive(t *testing.T) {
 		t.Fatalf("OpenLocalStore: %v", err)
 	}
 	other := t.TempDir()
-	if _, err := goGit.PlainClone(other, false, &goGit.CloneOptions{URL: "file://" + filepath.ToSlash(behindBare)}); err != nil {
+	if _, err := goGit.PlainClone(other, false, &goGit.CloneOptions{URL: fileURL(behindBare)}); err != nil {
 		t.Fatalf("PlainClone other: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(other, "behind.txt"), []byte("remote\n"), 0o600); err != nil {
