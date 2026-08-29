@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+# Pre-commit hook for PassOne.
+# Runs gofmt on staged Go files and then runs golangci-lint on the whole project.
+# If either check fails, the commit is aborted.
+
+set -e
+
+echo "[pre-commit] Checking gofmt on staged Go files..."
+
+staged_go=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+
+if [ -n "$staged_go" ]; then
+    unformatted=$(echo "$staged_go" | xargs gofmt -l)
+    if [ -n "$unformatted" ]; then
+        echo "[pre-commit] The following staged Go files are not formatted:"
+        echo "$unformatted"
+        echo "[pre-commit] Run 'gofmt -w .' and stage the changes before committing."
+        exit 1
+    fi
+fi
+
+echo "[pre-commit] Running golangci-lint..."
+
+go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8 run --timeout=5m
+
+echo "[pre-commit] All checks passed."

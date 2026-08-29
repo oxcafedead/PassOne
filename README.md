@@ -205,6 +205,23 @@ cd cmd/gui/frontend
 npm run dev
 ```
 
+### Git hooks
+
+В репозитории настроен `pre-commit` hook (директория `.githooks`). Перед каждым коммитом он автоматически:
+
+1. Проверяет, что все staged Go-файлы отформатированы `gofmt`.
+2. Запускает `golangci-lint`.
+
+Если какая-либо проверка не проходит, коммит прерывается.
+
+Чтобы включить hooks после клонирования репозитория, выполните:
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+(В текущем рабочем клоне hooks уже активированы.)
+
 ### Интеграционные тесты
 
 `tests/interop/run.ps1` — ручная проверка совместимости с реальным GnuPG. Требует собранный `passone.exe` и установленный GnuPG. Не входит в `go test ./...`.
@@ -223,9 +240,11 @@ npm run dev
 
 PR и issue приветствуются! Перед отправкой:
 
-1. `gofmt -w .`
+1. `gofmt -w .` (выполняется автоматически в `pre-commit` hook)
 2. `go test ./...`
-3. `golangci-lint run --timeout=5m`
+3. `golangci-lint run --timeout=5m` (выполняется автоматически в `pre-commit` hook)
+
+Если `pre-commit` hook настроен, пункты 1 и 3 пройдут автоматически при коммите.
 
 См. также [AGENTS.md](./AGENTS.md) — краткие заметки для контрибьюторов и агентов.
 
