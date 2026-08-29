@@ -188,7 +188,7 @@ func (s *Service) Lock() {
 	runtime.GC()
 }
 
-var lockedErr = errors.New("the application is locked; run unlock first")
+var errLocked = errors.New("the application is locked; run unlock first")
 
 // Encrypt encrypts plaintext to the given recipient entities, producing a
 // standard OpenPGP message compatible with GnuPG and pass.
@@ -248,14 +248,14 @@ func gnuPGCompatConfig() *packet.Config {
 // Decrypt decrypts an OpenPGP message using the unlocked in-memory keyring.
 func (s *Service) Decrypt(ciphertext []byte) ([]byte, error) {
 	if len(s.entities) == 0 {
-		return nil, lockedErr
+		return nil, errLocked
 	}
 	md, err := openpgp.ReadMessage(
 		bytes.NewReader(ciphertext),
 		openpgp.EntityList(s.entities),
 		func(_ []openpgp.Key, _ bool) ([]byte, error) {
 			if s.passphrase == nil {
-				return nil, lockedErr
+				return nil, errLocked
 			}
 			return s.passphrase, nil
 		},
@@ -320,7 +320,7 @@ func (s *Service) ResolveRecipients(ids []string) ([]*openpgp.Entity, error) {
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf(
-			"required OpenPGP key not found:\n  %s\nImport the matching key to continue, or fix .gpg-id.",
+			"required OpenPGP key not found:\n  %s\nImport the matching key to continue, or fix .gpg-id",
 			strings.Join(missing, "\n  "),
 		)
 	}
@@ -359,7 +359,7 @@ func KeyIDOf(e *openpgp.Entity) string {
 // imported key. It is used when a fresh store needs a default .gpg-id.
 func (s *Service) SinglePrimaryFingerprint() (string, error) {
 	if len(s.entities) == 0 {
-		return "", lockedErr
+		return "", errLocked
 	}
 	if len(s.entities) > 1 {
 		return "", errors.New("multiple keys imported; cannot choose a default automatically")

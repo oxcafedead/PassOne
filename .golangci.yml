@@ -1,40 +1,41 @@
+version: "2"
+
 run:
-  timeout: 5m
-  # golangci-lint v1.64 is built with Go 1.24. Set this to the linter's
+  # golangci-lint v2.12.x is built with Go 1.25. Set this to the linter's
   # runtime version, not the project's module version, to avoid a "lower than
   # the targeted Go version" error.
-  go: '1.24'
+  go: '1.25'
 
 linters:
   enable:
     # Default Go linters (equivalent to the old vet + unused set).
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
     # Style and correctness helpers.
     - gocritic
-    - gofmt
-    - goimports
     - misspell
     - revive
     - unconvert
+  settings:
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+        - name: var-naming
+          severity: warning
+    errcheck:
+      # Report unchecked errors even in type assertions.
+      check-type-assertions: false
+      check-blank: false
 
-linters-settings:
-  revive:
-    rules:
-      - name: exported
-        severity: warning
-      - name: var-naming
-        severity: warning
-  errcheck:
-    # Report unchecked errors even in type assertions.
-    check-type-assertions: false
-    check-blank: false
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0

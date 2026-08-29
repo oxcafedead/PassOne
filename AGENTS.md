@@ -68,8 +68,8 @@ Config lives in `.golangci.yml`. Enabled linters include `errcheck`, `revive`, `
 gofmt -w .
 
 # Run linter locally. Use `go run ...` because go.mod targets Go 1.26 while the
-# prebuilt golangci-lint v1.64 binary is built with Go 1.24 and fails to load deps.
-go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8 run --timeout=5m
+# prebuilt golangci-lint v2.12.x binary is built with Go 1.25 and fails to load deps.
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --timeout=5m
 ```
 
 CI (`.github/workflows/ci.yml`) installs golangci-lint with `install-mode: goinstall` to avoid the same version mismatch.
@@ -96,7 +96,7 @@ Recommended local order before pushing:
 
 - `cmd/gui/main.go` embeds `all:frontend/dist`. If the frontend has not been built, `go test ./...` fails with `pattern all:frontend/dist: no matching files found`.
 - `go test -race` requires `CGO_ENABLED=1`; it is not used in CI.
-- The project targets Go 1.26 in `go.mod`, but `.golangci.yml` sets `run.go: '1.24'` so the linter can actually start. Do not change this unless the linter version is also updated.
+- The project targets Go 1.26 in `go.mod`, but `.golangci.yml` sets `run.go: '1.25'` so the linter can actually start. Do not change this unless the linter version is also updated.
 - Exported identifiers must have doc comments (`revive` `exported` rule).
 - Windows-only code uses `golang.org/x/sys/windows`, `syscall` lazy DLLs, and DPAPI. Cross-platform refactors need careful review.
 - `tests/interop/run.ps1` is a manual integration harness that requires a built `passone.exe` and a real GnuPG installation. It is not part of `go test ./...`.
