@@ -8,13 +8,25 @@ import (
 )
 
 var (
-	appCtx     context.Context
-	appBinding *App
+	appCtx        context.Context
+	appBinding    *App
+	quitRequested = make(chan struct{})
 )
 
 func setAppContext(ctx context.Context) { appCtx = ctx }
 
 func globalCtx() context.Context { return appCtx }
+
+// requestQuit records that the user asked to quit exactly once. The main
+// goroutine watches it so it can force a clean process exit even if Wails or
+// the webview fail to tear down synchronously.
+func requestQuit() {
+	select {
+	case <-quitRequested:
+	default:
+		close(quitRequested)
+	}
+}
 
 // trayReady builds the system tray icon and menu.
 func trayReady() {
@@ -38,10 +50,10 @@ func trayReady() {
 					appBinding.Lock()
 				}
 			case <-quitItem.ClickedCh:
+				requestQuit()
 				if ctx := globalCtx(); ctx != nil {
 					runtime.Quit(ctx)
 				}
-				systray.Quit()
 				return
 			}
 		}

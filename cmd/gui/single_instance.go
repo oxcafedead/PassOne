@@ -39,9 +39,29 @@ type copyDataStruct struct {
 // the whole process; the second concurrent instance gets ERROR_ALREADY_EXISTS
 // and returns false, after which it must notify the primary instance and exit.
 // The check runs before systray/Wails start so no second tray icon is drawn.
+//
+// A mutex left by a crashed or force-killed previous run reports
+// ERROR_ALREADY_EXISTS even though nobody owns it anymore. We use a
+// zero-timeout wait to tell a live owner (WAIT_TIMEOUT => another instance is
+// running) apart from an abandoned one (WAIT_OBJECT_0/WAIT_ABANDONED => we can
+// take over), so a stale mutex never blocks a clean relaunch.
 func acquireSingleInstance() bool {
-	_, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr("PassOne-single-instance"))
-	return err != windows.ERROR_ALREADY_EXISTS
+	name, _ := windows.UTF16PtrFromString("PassOne-single-instance")
+	mutex, err := windows.CreateMutex(nil, false, name)
+	if err == nil {
+		// First instance: mutex freshly created; we are the sole tenant.
+		return true
+	}
+	if err != windows.ERROR_ALREADY_EXISTS {
+		// Unexpected failure: do not block startup.
+		return true
+	}
+	if mutex == 0 {
+		return true
+	}
+	const waitTimeoutCode = 0x00000102 // WAIT_TIMEOUT (0x102) is the only "still busy" result
+	status, _ := windows.WaitForSingleObject(mutex, 0)
+	return status != waitTimeoutCode
 }
 
 // activateExistingInstance asks the primary instance to show its window. The

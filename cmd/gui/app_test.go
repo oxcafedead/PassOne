@@ -16,6 +16,14 @@ func newTestAppGUI(t *testing.T) *App {
 	return NewApp(gui)
 }
 
+// TestAcquireSingleInstance guards the first-instance path: a fresh launch must
+// always take the single-instance mutex.
+func TestAcquireSingleInstance(t *testing.T) {
+	if !acquireSingleInstance() {
+		t.Fatal("expected a fresh process to acquire the single-instance mutex")
+	}
+}
+
 func TestAppInfoAndPresence(t *testing.T) {
 	a := newTestAppGUI(t)
 	info := a.AppInfo()

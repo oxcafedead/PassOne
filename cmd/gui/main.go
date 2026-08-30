@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/getlantern/golog"
 	"github.com/getlantern/systray"
@@ -53,6 +54,16 @@ func main() {
 	go func() {
 		defer close(systrayDone)
 		systray.Run(trayReady, trayExit)
+	}()
+
+	// Watchdog: once Quit is requested, Wails must tear the webview down and
+	// let the main goroutine return. If that hangs, force a clean exit so the
+	// process never lingers with a locked binary and a held single-instance
+	// mutex (which would otherwise leave the tray dead on the next launch).
+	go func() {
+		<-quitRequested
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
 	}()
 
 	background := &options.RGBA{R: 18, G: 20, B: 26, A: 1}
