@@ -5,7 +5,7 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "biweekly"
+      interval: "weekly"
     groups:
       go-minor-patch:
         applies-to: version-updates
@@ -19,7 +19,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/cmd/gui/frontend"
     schedule:
-      interval: "biweekly"
+      interval: "weekly"
     groups:
       npm-minor-patch:
         applies-to: version-updates
