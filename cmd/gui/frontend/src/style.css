@@ -117,6 +117,16 @@ html, body, #app {
 .text-success { color: var(--success); }
 .badge-success { background-color: var(--success-bg); color: var(--success); }
 
+.detail-area {
+  background-color: var(--panel);
+  color: var(--sub);
+  user-select: text;
+  -webkit-user-select: text;
+  font-family: var(--font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace);
+  border: none;
+}
+.detail-area:focus { outline: none; }
+
 .input {
   background-color: var(--panel);
   color: var(--text);

@@ -1043,7 +1043,13 @@
           <p class="text-danger text-xs break-words">{error}</p>
         {/if}
         {#if detail}
-          <pre class="panel ring-panel text-sub min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-xl p-4 font-mono text-xs leading-relaxed">{detail}</pre>
+          <textarea
+            readonly
+            data-testid="detail"
+            spellcheck="false"
+            class="detail-area panel ring-panel min-h-0 flex-1 resize-none overflow-auto rounded-xl p-4 font-mono text-xs leading-relaxed"
+            value={detail}
+          ></textarea>
         {:else}
           <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-panel text-sm text-faint">
             <svg xmlns="http://www.w3.org/2000/svg" class="icon-dim h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
