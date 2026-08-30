@@ -3,7 +3,6 @@
 > A self-contained Windows client for the [`pass`](https://www.passwordstore.org/) password store. No GnuPG, Git, or SSH binaries required.
 
 [![CI](https://github.com/oxcafedead/passone/actions/workflows/ci.yml/badge.svg)](https://github.com/oxcafedead/passone/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/oxcafedead/passone)](https://goreportcard.com/report/github.com/oxcafedead/passone)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/oxcafedead/passone)](./go.mod)
 
 PassOne is a native Windows app for working with password-store repositories (the `pass` format: `.gpg` files, `.gpg-id` recipients, and git).
