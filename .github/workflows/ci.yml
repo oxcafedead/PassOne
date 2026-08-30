@@ -37,7 +37,14 @@ jobs:
           npm run build
 
       - name: Run tests with coverage
-        run: go test -coverprofile='coverage.out' ./...
+        # Use an absolute path for the coverage profile. The relative-path form of
+        # `go test -coverprofile` is unreliable on Windows: the profile is resolved
+        # relative to the test binary's working directory and is frequently not
+        # written (or only partially written), producing a corrupt/missing file.
+        shell: pwsh
+        run: |
+          go test -coverprofile="$env:GITHUB_WORKSPACE\coverage.out" ./...
+          go run ./tools/coveragecheck -profile="$env:GITHUB_WORKSPACE\coverage.out" -threshold=70
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
