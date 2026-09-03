@@ -389,6 +389,14 @@ let lockPass: string = ''
     status = ''
     stopCountdown()
     settingsOpen = false
+    lockPass = ''
+    pgpPass = ''
+    sshPass = ''
+    cpwOld = ''
+    cpwNew = ''
+    cpwConfirm = ''
+    cpwErr = ''
+    cpwMsg = ''
   }
 
   async function loadSettings(): Promise<void> {
@@ -456,6 +464,14 @@ let lockPass: string = ''
     cloneUrl = ''
     clonePrep = null
     setupErr = ''
+    lockPass = ''
+    pgpPass = ''
+    sshPass = ''
+    cpwOld = ''
+    cpwNew = ''
+    cpwConfirm = ''
+    cpwErr = ''
+    cpwMsg = ''
   }
 
   async function pickPgp(): Promise<void> {
