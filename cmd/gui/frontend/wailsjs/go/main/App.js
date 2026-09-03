@@ -10,8 +10,8 @@ export function ClipboardClearSeconds() {
   return window['go']['main']['App']['ClipboardClearSeconds']();
 }
 
-export function ChangeLockPassword(arg1) {
-  return window['go']['main']['App']['ChangeLockPassword'](arg1);
+export function ChangeLockPassword(arg1, arg2) {
+  return window['go']['main']['App']['ChangeLockPassword'](arg1, arg2);
 }
 
 export function CloneStore(arg1, arg2) {

@@ -185,17 +185,20 @@ func TestChangeLockPassword(t *testing.T) {
 		t.Fatal("no keys imported")
 	}
 
-	if err := a.ChangeLockPassword(nil); err == nil {
+	if err := a.ChangeLockPassword([]byte(testLockPass), nil); err == nil {
 		t.Fatal("ChangeLockPassword with an empty password should fail")
 	}
-	if err := a.ChangeLockPassword([]byte("new-lock-pass")); err == nil {
+	if err := a.ChangeLockPassword([]byte("wrong"), []byte("new-lock-pass")); err == nil {
 		t.Fatal("ChangeLockPassword while locked should fail")
 	}
 
 	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
-	if err := a.ChangeLockPassword([]byte("new-lock-pass")); err != nil {
+	if err := a.ChangeLockPassword([]byte("wrong"), []byte("new-lock-pass")); err == nil {
+		t.Fatal("ChangeLockPassword with the wrong current password should fail")
+	}
+	if err := a.ChangeLockPassword([]byte(testLockPass), []byte("new-lock-pass")); err != nil {
 		t.Fatalf("ChangeLockPassword: %v", err)
 	}
 

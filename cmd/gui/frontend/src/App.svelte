@@ -802,7 +802,7 @@ let lockPass: string = ''
     }
     cpwBusy = true
     try {
-      await ChangeLockPassword(cpwNew)
+      await ChangeLockPassword(cpwOld, cpwNew)
       cpwOld = ''
       cpwNew = ''
       cpwConfirm = ''

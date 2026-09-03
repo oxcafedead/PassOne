@@ -1,6 +1,7 @@
 package app
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"os"
@@ -1105,12 +1106,13 @@ func (a *App) SetClipboardClear(seconds int) error {
 	return a.saveConfig()
 }
 
-// ChangeLockPassword replaces the lock password by re-sealing every stored key
-// (OpenPGP and SSH) under a key derived from newPassword. It must be called
-// while unlocked, so the current key_disk is available to open the existing
-// blobs; the vault salt is unchanged. On success the in-memory key is replaced
-// with the one derived from newPassword, keeping this session unlocked.
-func (a *App) ChangeLockPassword(newPassword []byte) error {
+// ChangeLockPassword replaces the lock password, first verifying the supplied
+// current password and then re-sealing every stored key (OpenPGP and SSH)
+// under a key derived from newPassword. It must be called while unlocked. The
+// current password is checked against the in-memory key_disk; a mismatch is
+// rejected. On success the in-memory key is replaced with the one derived from
+// newPassword, keeping this session unlocked.
+func (a *App) ChangeLockPassword(oldPassword, newPassword []byte) error {
 	if len(newPassword) == 0 {
 		return errors.New("a non-empty lock password is required")
 	}
@@ -1119,6 +1121,15 @@ func (a *App) ChangeLockPassword(newPassword []byte) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	oldKey, err := a.deriveKeyDisk(oldPassword)
+	if err != nil {
+		return err
+	}
+	defer security.Zero(oldKey)
+	if subtle.ConstantTimeCompare(oldKey, a.keyDisk) != 1 {
+		return errors.New("the current lock password does not match; unable to change it")
+	}
 
 	newKey, err := a.deriveKeyDisk(newPassword)
 	if err != nil {
