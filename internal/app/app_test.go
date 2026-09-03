@@ -566,6 +566,33 @@ func TestImportSSHKey(t *testing.T) {
 	}
 }
 
+func TestImportMustUseCurrentLockPassword(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+
+	// Importing an SSH key under a different lock password must be rejected so
+	// the vault cannot end up fragmented across two passwords.
+	pemBytes := sshTestKey(t)
+	if _, err := a.ImportSSHKey(pemBytes, nil, []byte("another-lock-pass")); err == nil {
+		t.Fatal("ImportSSHKey under a different lock password should fail")
+	}
+	if _, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey under the matching lock password: %v", err)
+	}
+
+	// Re-importing the PGP key under a stale password must also be rejected.
+	second := armoredTestKey(t)
+	if _, err := a.ImportPGPKey(second, []byte(testPGPPassphrase), []byte("another-lock-pass")); err == nil {
+		t.Fatal("ImportPGPKey under a different lock password should fail")
+	}
+	if _, err := a.ImportPGPKey(second, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey under the matching lock password: %v", err)
+	}
+}
+
 func TestUnlockPGPOnly(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)

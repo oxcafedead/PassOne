@@ -162,7 +162,7 @@ func (a *App) ImportPGPKey(block, keyPassphrase, lockPassword []byte) ([]*pgp.Ke
 	if err != nil {
 		return nil, err
 	}
-	key, err := a.deriveKeyDisk(lockPassword)
+	key, err := a.verifyImportLockLocked(lockPassword)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (a *App) ImportSSHKey(pem, keyPassphrase, lockPassword []byte) (*sshx.SSHKe
 	if err != nil {
 		return nil, err
 	}
-	key, err := a.deriveKeyDisk(lockPassword)
+	key, err := a.verifyImportLockLocked(lockPassword)
 	if err != nil {
 		return nil, err
 	}
@@ -471,6 +471,32 @@ func (a *App) deriveKeyDisk(passphrase []byte) ([]byte, error) {
 	}
 	defer security.Zero(salt)
 	return security.DeriveKey(passphrase, salt), nil
+}
+
+// verifyImportLockLocked confirms that the lock password supplied for an
+// import derives the same key that already seals every stored key blob. This
+// keeps the whole vault under a single lock password: without it, importing a
+// key while typed under a different (e.g. previous) lock password would seal
+// the new blob under another key and fragment the store. It returns the
+// derived key, which the caller must wipe. Stored blobs are only decrypted to
+// authenticate the password, never retained.
+func (a *App) verifyImportLockLocked(lockPassword []byte) ([]byte, error) {
+	key, err := a.deriveKeyDisk(lockPassword)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range []string{a.paths.PGPKeyFile, a.paths.SSHKeyFile} {
+		if !fileExists(p) {
+			continue
+		}
+		payload, err := a.vault.LoadSealed(key, p)
+		security.Zero(payload)
+		if err != nil {
+			security.Zero(key)
+			return nil, errors.New("the lock password does not match the key already stored; import under the current lock password")
+		}
+	}
+	return key, nil
 }
 
 // packKeyMaterial encodes a key's own passphrase together with its (still
