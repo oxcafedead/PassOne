@@ -82,7 +82,7 @@ func TestAppPassThroughMethods(t *testing.T) {
 		t.Fatal("expected locked initially")
 	}
 	// With no keys imported, Unlock succeeds trivially.
-	if err := a.Unlock("", ""); err != nil {
+	if err := a.Unlock("testpass"); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	a.Lock()
@@ -113,10 +113,10 @@ func TestAppPassThroughMethods(t *testing.T) {
 	if _, err := a.PickStoreDir(); err == nil {
 		t.Fatal("expected PickStoreDir without context to fail")
 	}
-	if _, err := a.ImportPGPKeyFile("missing.asc", ""); err == nil {
+	if _, err := a.ImportPGPKeyFile("missing.asc", "", "testpass"); err == nil {
 		t.Fatal("expected ImportPGPKeyFile missing file to fail")
 	}
-	if _, err := a.ImportSSHKeyFile("missing.key", ""); err == nil {
+	if _, err := a.ImportSSHKeyFile("missing.key", "", "testpass"); err == nil {
 		t.Fatal("expected ImportSSHKeyFile missing file to fail")
 	}
 	if a.HasSSHKeyLoaded() {

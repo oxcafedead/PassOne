@@ -96,6 +96,7 @@ Recommended local order before pushing:
 
 - `cmd/gui/main.go` embeds `all:frontend/dist`. If the frontend has not been built, `go test ./...` fails with `pattern all:frontend/dist: no matching files found`.
 - `go test -race` requires `CGO_ENABLED=1`; it is not used in CI.
+- NEVER run `go build`/`go run` directly on `cmd/gui` as the app entrypoint: Wails requires its own build tags and aborts with `Error Wails applications will not build without the correct build tags`. Build the GUI with `wails build` from `cmd/gui` instead.
 - The project targets Go 1.26 in `go.mod`, but `.golangci.yml` sets `run.go: '1.25'` so the linter can actually start. Do not change this unless the linter version is also updated.
 - Exported identifiers must have doc comments (`revive` `exported` rule).
 - Windows-only code uses `golang.org/x/sys/windows`, `syscall` lazy DLLs, and DPAPI. Cross-platform refactors need careful review.

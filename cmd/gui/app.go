@@ -18,8 +18,8 @@ func NewApp(g *ui.GUI) *App { return &App{gui: g} }
 // IsUnlocked reports whether decrypted key material is in memory.
 func (a *App) IsUnlocked() bool { return a.gui.IsUnlocked() }
 
-// Unlock validates the stored key passphrases.
-func (a *App) Unlock(pgpPass, sshPass string) error { return a.gui.Unlock(pgpPass, sshPass) }
+// Unlock validates and loads the stored keys using the single lock password.
+func (a *App) Unlock(lockPassword string) error { return a.gui.Unlock(lockPassword) }
 
 // Lock drops all decrypted keys from memory.
 func (a *App) Lock() { a.gui.Lock() }
@@ -67,13 +67,13 @@ func (a *App) PickPrivateKey(title string) (ui.Picked, error) { return a.gui.Pic
 func (a *App) PickStoreDir() (ui.Picked, error) { return a.gui.PickStoreDir() }
 
 // ImportPGPKeyFile imports an on-disk OpenPGP private key.
-func (a *App) ImportPGPKeyFile(path, passphrase string) (string, error) {
-	return a.gui.ImportPGPKeyFile(path, passphrase)
+func (a *App) ImportPGPKeyFile(path, passphrase, lockPassword string) (string, error) {
+	return a.gui.ImportPGPKeyFile(path, passphrase, lockPassword)
 }
 
 // ImportSSHKeyFile imports an on-disk OpenSSH private key.
-func (a *App) ImportSSHKeyFile(path, passphrase string) (string, error) {
-	return a.gui.ImportSSHKeyFile(path, passphrase)
+func (a *App) ImportSSHKeyFile(path, passphrase, lockPassword string) (string, error) {
+	return a.gui.ImportSSHKeyFile(path, passphrase, lockPassword)
 }
 
 // HasSSHKeyLoaded reports whether the SSH signer is in memory for transport.
@@ -81,7 +81,7 @@ func (a *App) HasSSHKeyLoaded() bool { return a.gui.HasSSHKeyLoaded() }
 
 // LoadSSHKey decrypts the stored SSH key into memory without unlocking the
 // session. Used by onboarding to make cloning possible after a restart.
-func (a *App) LoadSSHKey(sshPass string) error { return a.gui.LoadSSHKey(sshPass) }
+func (a *App) LoadSSHKey(lockPassword string) error { return a.gui.LoadSSHKey(lockPassword) }
 
 // OpenLocalStore validates and activates a local pass store directory.
 func (a *App) OpenLocalStore(path string) error { return a.gui.OpenLocalStore(path) }

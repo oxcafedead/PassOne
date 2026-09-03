@@ -29,6 +29,7 @@ import (
 )
 
 const testPGPPassphrase = "app-test-pass"
+const testLockPass = "test-lock-pass"
 
 // fileURL returns a RFC 8089 file:// URL for an absolute local path.
 // It works on both Windows (file:///C:/...) and Unix (file:///tmp/...).
@@ -93,7 +94,7 @@ func TestImportUnlockDecryptFlow(t *testing.T) {
 	}
 	fp = entityFingerprint(el[0])
 
-	infos, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase))
+	infos, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass))
 	if err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestImportUnlockDecryptFlow(t *testing.T) {
 	}
 
 	// A session unlock with the OpenPGP passphrase makes the store usable.
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 
@@ -158,10 +159,10 @@ func TestImportUnlockDecryptFlow(t *testing.T) {
 	}
 
 	// Unlock with the wrong passphrase fails; the right one works.
-	if err := a.Unlock([]byte("wrong"), nil); err == nil {
+	if err := a.Unlock([]byte("wrong")); err == nil {
 		t.Fatal("expected wrong pgp passphrase to fail")
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	plain2, err := a.ShowPassword("github/personal")
@@ -223,7 +224,7 @@ func TestLockUnlockEventHooks(t *testing.T) {
 	a.OnLock(func() { lockEvents <- struct{}{} })
 	a.OnUnlock(func() { unlockEvents <- struct{}{} })
 
-	if err := a.Unlock(nil, nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	select {
@@ -240,7 +241,7 @@ func TestLockUnlockEventHooks(t *testing.T) {
 	}
 
 	// The lazy idle lock inside a failing operation must also fire the hook.
-	if err := a.Unlock(nil, nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("second Unlock: %v", err)
 	}
 	select {
@@ -305,7 +306,7 @@ func TestSetPasswordCreateEditRemove(t *testing.T) {
 		t.Fatalf("ReadArmoredKeyRing: %v", err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -318,7 +319,7 @@ func TestSetPasswordCreateEditRemove(t *testing.T) {
 
 	// A session unlock with the OpenPGP passphrase is required before any
 	// password operation, even right after an import.
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 
@@ -395,7 +396,7 @@ func TestAutoCommitOnSaveAndRemove(t *testing.T) {
 		t.Fatalf("ReadArmoredKeyRing: %v", err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -416,7 +417,7 @@ func TestAutoCommitOnSaveAndRemove(t *testing.T) {
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 
@@ -513,7 +514,7 @@ func TestStoredStores(t *testing.T) {
 func TestImportSSHKey(t *testing.T) {
 	a := newTestApp(t)
 	pemBytes := sshTestKey(t)
-	k, err := a.ImportSSHKey(pemBytes, nil)
+	k, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass))
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -536,7 +537,7 @@ func TestUnlockPGPOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -546,7 +547,7 @@ func TestUnlockPGPOnly(t *testing.T) {
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.UnlockPGP([]byte(testPGPPassphrase)); err != nil {
+	if err := a.UnlockPGP([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockPGP: %v", err)
 	}
 	if !a.IsUnlocked() {
@@ -560,10 +561,10 @@ func TestUnlockPGPOnly(t *testing.T) {
 func TestUnlockSSHOnly(t *testing.T) {
 	a := newTestApp(t)
 	pemBytes := sshTestKey(t)
-	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+	if _, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := a.UnlockSSH(nil); err != nil {
+	if err := a.UnlockSSH([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockSSH: %v", err)
 	}
 	if !a.HasSSHKeyLoaded() {
@@ -574,10 +575,10 @@ func TestUnlockSSHOnly(t *testing.T) {
 func TestLoadStoredSSHKey(t *testing.T) {
 	a := newTestApp(t)
 	pemBytes := sshTestKey(t)
-	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+	if _, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := a.LoadStoredSSHKey(nil); err != nil {
+	if err := a.LoadStoredSSHKey([]byte(testLockPass)); err != nil {
 		t.Fatalf("LoadStoredSSHKey: %v", err)
 	}
 	if !a.HasSSHKeyLoaded() {
@@ -588,10 +589,10 @@ func TestLoadStoredSSHKey(t *testing.T) {
 func TestSSHPublicKey(t *testing.T) {
 	a := newTestApp(t)
 	pemBytes := sshTestKey(t)
-	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+	if _, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := a.UnlockSSH(nil); err != nil {
+	if err := a.UnlockSSH([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockSSH: %v", err)
 	}
 	pub, err := a.SSHPublicKey()
@@ -611,7 +612,7 @@ func TestPasswordExists(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -621,7 +622,7 @@ func TestPasswordExists(t *testing.T) {
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 
@@ -652,7 +653,7 @@ func TestCommitPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -665,7 +666,7 @@ func TestCommitPassword(t *testing.T) {
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if err := a.SavePassword("site", []byte("secret\n")); err != nil {
@@ -685,7 +686,7 @@ func TestRemovePasswordNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -695,57 +696,11 @@ func TestRemovePasswordNotFound(t *testing.T) {
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if err := a.RemovePassword("missing"); err == nil {
 		t.Fatal("expected RemovePassword of missing entry to fail")
-	}
-}
-
-func TestKeyNeedsPassphrase(t *testing.T) {
-	a := newTestApp(t)
-
-	// No keys stored -> false, nil.
-	need, err := a.PGPKeyNeedsPassphrase()
-	if err != nil {
-		t.Fatalf("PGPKeyNeedsPassphrase: %v", err)
-	}
-	if need {
-		t.Fatal("expected false with no PGP key")
-	}
-	need, err = a.SSHKeyNeedsPassphrase()
-	if err != nil {
-		t.Fatalf("SSHKeyNeedsPassphrase: %v", err)
-	}
-	if need {
-		t.Fatal("expected false with no SSH key")
-	}
-
-	// Import an unencrypted SSH key -> false.
-	pemBytes := sshTestKey(t)
-	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
-		t.Fatalf("ImportSSHKey: %v", err)
-	}
-	need, err = a.SSHKeyNeedsPassphrase()
-	if err != nil {
-		t.Fatalf("SSHKeyNeedsPassphrase: %v", err)
-	}
-	if need {
-		t.Fatal("expected unencrypted SSH key not to require passphrase")
-	}
-
-	// Import a passphrase-protected PGP key -> true.
-	armored := armoredTestKey(t)
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
-		t.Fatalf("ImportPGPKey: %v", err)
-	}
-	need, err = a.PGPKeyNeedsPassphrase()
-	if err != nil {
-		t.Fatalf("PGPKeyNeedsPassphrase: %v", err)
-	}
-	if !need {
-		t.Fatal("expected passphrase-protected PGP key to require passphrase")
 	}
 }
 
@@ -757,7 +712,7 @@ func TestStatusWithoutRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -1018,7 +973,7 @@ func TestKnownHostTrusted(t *testing.T) {
 func TestTestSSH(t *testing.T) {
 	a := newTestApp(t)
 	pemBytes := sshTestKey(t)
-	k, err := a.ImportSSHKey(pemBytes, nil)
+	k, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass))
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -1028,19 +983,19 @@ func TestTestSSH(t *testing.T) {
 		t.Fatalf("expected ErrLocked, got %v", err)
 	}
 
-	if err := a.UnlockSSH(nil); err != nil {
+	if err := a.UnlockSSH([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockSSH: %v", err)
 	}
 
 	// No key loaded after locking.
 	a.Lock()
-	if err := a.UnlockSSH(nil); err != nil {
+	if err := a.UnlockSSH([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockSSH: %v", err)
 	}
 
 	// Missing SSH key (remove stored key from disk).
 	a2 := newTestApp(t)
-	if err := a2.UnlockSSH(nil); err != nil {
+	if err := a2.UnlockSSH([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockSSH without stored key: %v", err)
 	}
 	if err := a2.TestSSH("github.com:22"); err == nil {
@@ -1083,7 +1038,7 @@ func TestDefaultCloneDir(t *testing.T) {
 func TestCloneOrReuse(t *testing.T) {
 	a := newTestApp(t)
 	pemBytes := sshTestKey(t)
-	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+	if _, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
 
@@ -1166,11 +1121,11 @@ func TestCloneOrReuse(t *testing.T) {
 func TestCloneStoreValidation(t *testing.T) {
 	a := newTestApp(t)
 	pemBytes := sshTestKey(t)
-	k, err := a.ImportSSHKey(pemBytes, nil)
+	k, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass))
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := a.UnlockSSH(nil); err != nil {
+	if err := a.UnlockSSH([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockSSH: %v", err)
 	}
 
@@ -1211,10 +1166,10 @@ func TestCloneStoreValidation(t *testing.T) {
 
 	// Trusted host but clone fails because the server does not serve git.
 	a3 := newTestApp(t)
-	if _, err := a3.ImportSSHKey(pemBytes, nil); err != nil {
+	if _, err := a3.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := a3.UnlockSSH(nil); err != nil {
+	if err := a3.UnlockSSH([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockSSH: %v", err)
 	}
 	if err := a3.TrustHost(hostport, pub); err != nil {
@@ -1233,10 +1188,10 @@ func TestCloneStoreValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	a4 := newTestApp(t)
-	if _, err := a4.ImportSSHKey(pemBytes, nil); err != nil {
+	if _, err := a4.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := a4.UnlockSSH(nil); err != nil {
+	if err := a4.UnlockSSH([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockSSH: %v", err)
 	}
 	hostport4, pub4, stop4 := startTestSSHServer(t, k.Signer().PublicKey())
@@ -1295,11 +1250,11 @@ func TestSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	pemBytes := sshTestKey(t)
-	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
+	if _, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
 
@@ -1307,19 +1262,19 @@ func TestSync(t *testing.T) {
 	if _, err := a.Sync(); !errors.Is(err, ErrLocked) {
 		t.Fatalf("expected ErrLocked, got %v", err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 
 	// No store open.
 	a2 := newTestApp(t)
-	if _, err := a2.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a2.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
-	if _, err := a2.ImportSSHKey(pemBytes, nil); err != nil {
+	if _, err := a2.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := a2.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a2.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if _, err := a2.Sync(); err == nil {
@@ -1397,14 +1352,14 @@ func TestSyncNoSSHKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir, _ := setupGitStore(t, fp)
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if _, err := a.Sync(); err == nil {
@@ -1444,7 +1399,7 @@ func TestStatusComprehensive(t *testing.T) {
 
 	// Git-backed store without remote.
 	a2 := newTestApp(t)
-	if _, err := a2.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a2.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	gitDir := filepath.Join(t.TempDir(), "git")
@@ -1485,7 +1440,7 @@ func TestStatusComprehensive(t *testing.T) {
 	}
 
 	// Ahead of origin.
-	if err := a2.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a2.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if err := a2.SavePassword("ahead", []byte("secret\n")); err != nil {
@@ -1553,7 +1508,7 @@ func TestCommitPasswordPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -1563,7 +1518,7 @@ func TestCommitPasswordPaths(t *testing.T) {
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 
@@ -1599,7 +1554,7 @@ func TestPasswordExistsErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -1622,10 +1577,10 @@ func TestPasswordExistsErrors(t *testing.T) {
 func TestSavePasswordNoStore(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if err := a.SavePassword("x", []byte("secret\n")); err == nil {
@@ -1639,10 +1594,10 @@ func TestSSHPublicKeyErrors(t *testing.T) {
 		t.Fatalf("expected ErrLocked, got %v", err)
 	}
 	armored := armoredTestKey(t)
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
-	if err := a.UnlockPGP([]byte(testPGPPassphrase)); err != nil {
+	if err := a.UnlockPGP([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockPGP: %v", err)
 	}
 	if _, err := a.SSHPublicKey(); err == nil {
@@ -1658,7 +1613,7 @@ func TestOpenLocalStoreValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 
@@ -1667,7 +1622,7 @@ func TestOpenLocalStoreValidation(t *testing.T) {
 	if _, err := store.Create(storeDir, []string{fp}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if err := a.OpenLocalStore(storeDir); err != nil {
@@ -1676,10 +1631,10 @@ func TestOpenLocalStoreValidation(t *testing.T) {
 
 	// Unlocked with a non-matching recipient fails.
 	a2 := newTestApp(t)
-	if _, err := a2.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a2.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
-	if err := a2.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a2.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	otherDir := filepath.Join(t.TempDir(), "other")
@@ -1694,7 +1649,7 @@ func TestOpenLocalStoreValidation(t *testing.T) {
 func TestUnlockPGPWrongPassphrase(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	if err := a.UnlockPGP([]byte("wrong")); err == nil {
@@ -1718,7 +1673,7 @@ func TestLoadStoredSSHKeyErrors(t *testing.T) {
 		t.Fatalf("MarshalPrivateKeyWithPassphrase: %v", err)
 	}
 	pemBytes := pem.EncodeToMemory(block)
-	if _, err := a.ImportSSHKey(pemBytes, []byte("secret")); err != nil {
+	if _, err := a.ImportSSHKey(pemBytes, []byte("secret"), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
 	if err := a.LoadStoredSSHKey([]byte("wrong")); err == nil {
@@ -1737,7 +1692,7 @@ func TestUnlockSSHWrongPassphrase(t *testing.T) {
 		t.Fatalf("MarshalPrivateKeyWithPassphrase: %v", err)
 	}
 	pemBytes := pem.EncodeToMemory(block)
-	if _, err := a.ImportSSHKey(pemBytes, []byte("secret")); err != nil {
+	if _, err := a.ImportSSHKey(pemBytes, []byte("secret"), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
 	if err := a.UnlockSSH([]byte("wrong")); err == nil {
@@ -1748,7 +1703,7 @@ func TestUnlockSSHWrongPassphrase(t *testing.T) {
 func TestUnlockSSHFailureDoesNotUnlockPGP(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -1760,11 +1715,11 @@ func TestUnlockSSHFailureDoesNotUnlockPGP(t *testing.T) {
 		t.Fatalf("MarshalPrivateKeyWithPassphrase: %v", err)
 	}
 	pemBytes := pem.EncodeToMemory(block)
-	if _, err := a.ImportSSHKey(pemBytes, []byte("secret")); err != nil {
+	if _, err := a.ImportSSHKey(pemBytes, []byte("secret"), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), []byte("wrong")); err == nil {
-		t.Fatal("expected Unlock to fail with wrong SSH passphrase")
+	if err := a.Unlock([]byte("wrong")); err == nil {
+		t.Fatal("expected Unlock to fail with wrong passphrase")
 	}
 	if a.IsUnlocked() {
 		t.Fatal("expected app to remain locked after failed SSH unlock")
@@ -1797,7 +1752,7 @@ func TestShowPasswordErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := entityFingerprint(el[0])
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -1807,7 +1762,7 @@ func TestShowPasswordErrors(t *testing.T) {
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 
@@ -1833,7 +1788,7 @@ func TestImportPGPKeyStoreFailure(t *testing.T) {
 	if err := os.WriteFile(a.paths.KeysDir, []byte("block"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err == nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err == nil {
 		t.Fatal("expected ImportPGPKey to fail when the key cannot be stored")
 	}
 }
@@ -1847,7 +1802,7 @@ func TestImportSSHKeyStoreFailure(t *testing.T) {
 	if err := os.WriteFile(a.paths.KeysDir, []byte("block"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.ImportSSHKey(pemBytes, nil); err == nil {
+	if _, err := a.ImportSSHKey(pemBytes, nil, []byte(testLockPass)); err == nil {
 		t.Fatal("expected ImportSSHKey to fail when the key cannot be stored")
 	}
 }
@@ -1861,7 +1816,7 @@ func TestValidateStoreLockedNoPGPKey(t *testing.T) {
 	if err := a.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
 	}
-	if err := a.Unlock(nil, nil); err == nil {
+	if err := a.Unlock([]byte(testLockPass)); err == nil {
 		t.Fatal("expected Unlock to fail without a PGP key for the configured store")
 	}
 }
@@ -1876,10 +1831,10 @@ func TestListPasswordsNoStore(t *testing.T) {
 func TestRemovePasswordNoStore(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
-	if err := a.Unlock([]byte(testPGPPassphrase), nil); err != nil {
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if err := a.RemovePassword("x"); err == nil {
@@ -1891,33 +1846,5 @@ func TestCloneHostportBadURL(t *testing.T) {
 	a := newTestApp(t)
 	if _, err := a.CloneHostport(""); err == nil {
 		t.Fatal("expected CloneHostport to fail for empty URL")
-	}
-}
-
-func TestPGPKeyNeedsPassphraseLoadError(t *testing.T) {
-	a := newTestApp(t)
-	armored := armoredTestKey(t)
-	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
-		t.Fatalf("ImportPGPKey: %v", err)
-	}
-	if err := os.WriteFile(a.paths.PGPKeyFile, []byte("corrupt"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.PGPKeyNeedsPassphrase(); err == nil {
-		t.Fatal("expected PGPKeyNeedsPassphrase to fail for corrupt sealed file")
-	}
-}
-
-func TestSSHKeyNeedsPassphraseLoadError(t *testing.T) {
-	a := newTestApp(t)
-	pemBytes := sshTestKey(t)
-	if _, err := a.ImportSSHKey(pemBytes, nil); err != nil {
-		t.Fatalf("ImportSSHKey: %v", err)
-	}
-	if err := os.WriteFile(a.paths.SSHKeyFile, []byte("corrupt"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.SSHKeyNeedsPassphrase(); err == nil {
-		t.Fatal("expected SSHKeyNeedsPassphrase to fail for corrupt sealed file")
 	}
 }

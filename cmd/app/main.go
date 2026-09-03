@@ -32,18 +32,18 @@ Git
   sync                         Fetch, merge and push
 
 Session
-  unlock                       Unlock stored keys (prompts for passphrases)
-  lock                         Lock: drop decrypted keys from memory
-  state                        Show lock state and configuration
-  config                       Show configuration
+  unlock                        Unlock stored keys
+  lock                          Lock: drop decrypted keys from memory
+  state                         Show lock state and configuration
+  config                        Show configuration
 
 Other
-  help                         Show this help
+  help                          Show this help
 
 Security notes:
   - Private keys and passphrases are kept in memory only while unlocked.
-  - Keys are stored locally sealed with AES-256-GCM; the sealing key itself is
-    protected by Windows DPAPI.
+  - Keys are stored locally sealed with AES-256-GCM; the sealing key is derived
+    from the master passphrase (Argon2id) and never stored on disk.
   - 5-minute idle timeout (configurable in config.json) drops all key material.
 `
 

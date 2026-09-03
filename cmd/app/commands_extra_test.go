@@ -22,6 +22,7 @@ import (
 )
 
 const testPGPPassphrase = "cmd-app-test-pass"
+const testLockPass = "cmd-app-test-lock"
 
 // newTestEnv returns an env bound to an isolated PASSONE_DIR and temp stdout/stderr.
 // Optional stdinContent is written to a temp file used as stdin.
@@ -135,7 +136,7 @@ func setupStore(t *testing.T, e *env) (storeDir string) {
 	t.Helper()
 	armored := armoredPGPTestKey(t)
 	fp := pgpFingerprint(t, armored)
-	if _, err := e.app.ImportPGPKey(armored, []byte(testPGPPassphrase)); err != nil {
+	if _, err := e.app.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir = filepath.Join(t.TempDir(), "pass")
@@ -148,10 +149,10 @@ func setupStore(t *testing.T, e *env) (storeDir string) {
 	return storeDir
 }
 
-// unlock unlocks the app's PGP key using the passphrase in stdin.
+// unlock unlocks the app's PGP key using the lock password.
 func unlockPGP(t *testing.T, e *env) {
 	t.Helper()
-	if err := e.app.UnlockPGP([]byte(testPGPPassphrase)); err != nil {
+	if err := e.app.UnlockPGP([]byte(testLockPass)); err != nil {
 		t.Fatalf("UnlockPGP: %v", err)
 	}
 }
@@ -596,10 +597,10 @@ func TestCmdPublicKey(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		e := newTestEnv(t)
-		if _, err := e.app.ImportSSHKey(sshTestKey(t), nil); err != nil {
+		if _, err := e.app.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
 			t.Fatalf("ImportSSHKey: %v", err)
 		}
-		if err := e.app.UnlockSSH(nil); err != nil {
+		if err := e.app.UnlockSSH([]byte(testLockPass)); err != nil {
 			t.Fatalf("UnlockSSH: %v", err)
 		}
 		if err := cmdPublicKey(e, nil); err != nil {
@@ -628,7 +629,7 @@ func TestCmdImportPGP(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
-		e := newTestEnv(t, testPGPPassphrase+"\n")
+		e := newTestEnv(t, testLockPass+"\n"+testPGPPassphrase+"\n")
 		keyFile := filepath.Join(t.TempDir(), "key.asc")
 		if err := os.WriteFile(keyFile, armoredPGPTestKey(t), 0o600); err != nil {
 			t.Fatal(err)
@@ -662,7 +663,7 @@ func TestCmdImportSSH(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnv(t, testLockPass+"\n\n")
 		keyFile := filepath.Join(t.TempDir(), "id_ed25519")
 		if err := os.WriteFile(keyFile, sshTestKey(t), 0o600); err != nil {
 			t.Fatal(err)
@@ -691,7 +692,7 @@ func TestEnsureUnlocked(t *testing.T) {
 	})
 
 	t.Run("unlocks from stdin", func(t *testing.T) {
-		e := newTestEnv(t, testPGPPassphrase+"\n")
+		e := newTestEnv(t, testLockPass+"\n")
 		_ = setupStore(t, e)
 		if err := ensureUnlocked(e); err != nil {
 			t.Fatalf("ensureUnlocked: %v", err)
@@ -713,7 +714,7 @@ func TestEnsurePGPUnlocked(t *testing.T) {
 	})
 
 	t.Run("unlocks from stdin", func(t *testing.T) {
-		e := newTestEnv(t, testPGPPassphrase+"\n")
+		e := newTestEnv(t, testLockPass+"\n")
 		_ = setupStore(t, e)
 		if err := ensurePGPUnlocked(e); err != nil {
 			t.Fatalf("ensurePGPUnlocked: %v", err)
@@ -727,10 +728,10 @@ func TestEnsurePGPUnlocked(t *testing.T) {
 func TestEnsureSSHUnlocked(t *testing.T) {
 	t.Run("already loaded", func(t *testing.T) {
 		e := newTestEnv(t)
-		if _, err := e.app.ImportSSHKey(sshTestKey(t), nil); err != nil {
+		if _, err := e.app.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
 			t.Fatalf("ImportSSHKey: %v", err)
 		}
-		if err := e.app.UnlockSSH(nil); err != nil {
+		if err := e.app.UnlockSSH([]byte(testLockPass)); err != nil {
 			t.Fatalf("UnlockSSH: %v", err)
 		}
 		if err := ensureSSHUnlocked(e); err != nil {
@@ -739,8 +740,8 @@ func TestEnsureSSHUnlocked(t *testing.T) {
 	})
 
 	t.Run("unlocks from stdin", func(t *testing.T) {
-		e := newTestEnv(t, "\n") // key has no passphrase
-		if _, err := e.app.ImportSSHKey(sshTestKey(t), nil); err != nil {
+		e := newTestEnv(t, testLockPass+"\n")
+		if _, err := e.app.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
 			t.Fatalf("ImportSSHKey: %v", err)
 		}
 		if err := ensureSSHUnlocked(e); err != nil {
@@ -753,9 +754,9 @@ func TestEnsureSSHUnlocked(t *testing.T) {
 
 	t.Run("unlocks encrypted key from stdin", func(t *testing.T) {
 		const pass = "ssh-pass"
-		e := newTestEnv(t, pass+"\n")
+		e := newTestEnv(t, testLockPass+"\n")
 		key := sshEncryptedTestKey(t, []byte(pass))
-		if _, err := e.app.ImportSSHKey(key, []byte(pass)); err != nil {
+		if _, err := e.app.ImportSSHKey(key, []byte(pass), []byte(testLockPass)); err != nil {
 			t.Fatalf("ImportSSHKey: %v", err)
 		}
 		if err := ensureSSHUnlocked(e); err != nil {
@@ -831,8 +832,8 @@ func TestAskYesNoError(t *testing.T) {
 
 func TestUnlockPrompt(t *testing.T) {
 	const sshPass = "ssh-pass"
-	e := newTestEnv(t, sshPass+"\n")
-	if _, err := e.app.ImportSSHKey(sshEncryptedTestKey(t, []byte(sshPass)), []byte(sshPass)); err != nil {
+	e := newTestEnv(t, testLockPass+"\n")
+	if _, err := e.app.ImportSSHKey(sshEncryptedTestKey(t, []byte(sshPass)), []byte(sshPass), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
 	if err := unlockPrompt(e); err != nil {
@@ -867,7 +868,7 @@ func TestCmdUnlock(t *testing.T) {
 	})
 
 	t.Run("unlocks from stdin", func(t *testing.T) {
-		e := newTestEnv(t, testPGPPassphrase+"\n")
+		e := newTestEnv(t, testLockPass+"\n")
 		_ = setupStore(t, e)
 		if err := cmdUnlock(e, nil); err != nil {
 			t.Fatalf("cmdUnlock: %v", err)

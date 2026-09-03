@@ -28,6 +28,7 @@ type Paths struct {
 	ConfigFile     string
 	KnownHostsFile string
 	AppKeyFile     string
+	SaltFile       string
 	PGPKeyFile     string
 	SSHKeyFile     string
 }
@@ -70,6 +71,7 @@ func PathsFromBase(base string) Paths {
 		ConfigFile:     filepath.Join(base, "config.json"),
 		KnownHostsFile: filepath.Join(base, "known_hosts"),
 		AppKeyFile:     filepath.Join(keys, "app.key"),
+		SaltFile:       filepath.Join(keys, "salt.bin"),
 		PGPKeyFile:     filepath.Join(keys, "pgp.dat"),
 		SSHKeyFile:     filepath.Join(keys, "ssh.dat"),
 	}

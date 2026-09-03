@@ -26,12 +26,12 @@ export function CurrentSettings() {
   return window['go']['main']['App']['CurrentSettings']();
 }
 
-export function ImportPGPKeyFile(arg1, arg2) {
-  return window['go']['main']['App']['ImportPGPKeyFile'](arg1, arg2);
+export function ImportPGPKeyFile(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ImportPGPKeyFile'](arg1, arg2, arg3);
 }
 
-export function ImportSSHKeyFile(arg1, arg2) {
-  return window['go']['main']['App']['ImportSSHKeyFile'](arg1, arg2);
+export function ImportSSHKeyFile(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ImportSSHKeyFile'](arg1, arg2, arg3);
 }
 
 export function HasSSHKeyLoaded() {
@@ -110,8 +110,8 @@ export function TrustHost(arg1) {
   return window['go']['main']['App']['TrustHost'](arg1);
 }
 
-export function Unlock(arg1, arg2) {
-  return window['go']['main']['App']['Unlock'](arg1, arg2);
+export function Unlock(arg1) {
+  return window['go']['main']['App']['Unlock'](arg1);
 }
 
 export function UpdatePassword(arg1, arg2, arg3, arg4) {

@@ -58,8 +58,9 @@
   }
 
   let info: Record<string, string> = {dataDir: '', storePath: '', pgpKey: '', sshKey: '', autoLock: ''}
-  let pgpPass: string = ''
-  let sshPass: string = ''
+let pgpPass: string = ''
+let sshPass: string = ''
+let lockPass: string = ''
   let error: string = ''
   let busy: boolean = false
   let unlocked: boolean = false
@@ -480,7 +481,7 @@
     importBusy = true
     setupErr = ''
     try {
-      const msg = await ImportPGPKeyFile(pgpPicked, pgpPass)
+      const msg = await ImportPGPKeyFile(pgpPicked, pgpPass, lockPass)
       pgpPicked = ''
       pgpPass = ''
       flash(msg)
@@ -500,7 +501,7 @@
     importBusy = true
     setupErr = ''
     try {
-      const msg = await ImportSSHKeyFile(sshPicked, sshPass)
+      const msg = await ImportSSHKeyFile(sshPicked, sshPass, lockPass)
       sshPicked = ''
       sshPass = ''
       flash(msg)
@@ -516,7 +517,7 @@
     importBusy = true
     setupErr = ''
     try {
-      await LoadSSHKey(sshPass)
+      await LoadSSHKey(lockPass)
       sshPass = ''
       sshLoaded = true
       flash('SSH key loaded')
@@ -775,9 +776,8 @@
     error = ''
     busy = true
     try {
-      await Unlock(pgpPass, sshPass)
-      pgpPass = ''
-      sshPass = ''
+      await Unlock(lockPass)
+      lockPass = ''
       await refresh()
     } catch (e) {
       error = String(e)
@@ -829,12 +829,8 @@
 
     <form class="flex w-full max-w-sm flex-col gap-3" on:submit|preventDefault={submit}>
       <label class="text-faint flex flex-col gap-1 text-xs">
-        OpenPGP key passphrase
-        <input type="password" bind:value={pgpPass} autocomplete="current-password" placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
-      </label>
-      <label class="text-faint flex flex-col gap-1 text-xs">
-        SSH key passphrase
-        <input type="password" bind:value={sshPass} placeholder="leave empty if your key has none" class="input rounded-lg px-3 py-2 text-sm"/>
+        Lock password
+        <input type="password" bind:value={lockPass} autocomplete="current-password" placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
       </label>
       {#if error}
         <p class="text-danger text-xs break-words">{error}</p>
@@ -1201,6 +1197,11 @@
               open an existing store folder or clone one.
             </p>
 
+            <label class="text-faint flex flex-col gap-1 text-xs">
+              Lock password (protects all stored keys)
+              <input type="password" bind:value={lockPass} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+            </label>
+
             <h4 class="text-mute mt-1 text-xs font-semibold tracking-wide uppercase">SSH key</h4>
             {#if sw.hasSsh && sshLoaded}
               <div class="flex items-center gap-2">
@@ -1416,6 +1417,10 @@
       {:else}
       <section class="flex flex-col gap-2">
         <h4 class="text-mute text-xs font-semibold tracking-wide uppercase">Your keys</h4>
+        <label class="text-faint flex flex-col gap-1 text-xs">
+          Lock password (protects all stored keys)
+          <input type="password" bind:value={lockPass} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+        </label>
         <div class="flex items-center gap-2">
           <button on:click={pickPgp} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose PGP key…</button>
           <span class="text-faint min-w-0 flex-1 truncate text-xs">

@@ -14,9 +14,9 @@ export function CreatePassword(arg1:string,arg2:string,arg3:string,arg4:string):
 
 export function CurrentSettings():Promise<ui.SettingsInfo>;
 
-export function ImportPGPKeyFile(arg1:string,arg2:string):Promise<string>;
+export function ImportPGPKeyFile(arg1:string,arg2:string,arg3:string):Promise<string>;
 
-export function ImportSSHKeyFile(arg1:string,arg2:string):Promise<string>;
+export function ImportSSHKeyFile(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function HasSSHKeyLoaded():Promise<boolean>;
 
@@ -56,6 +56,6 @@ export function Sync():Promise<string>;
 
 export function TrustHost(arg1:string):Promise<void>;
 
-export function Unlock(arg1:string,arg2:string):Promise<void>;
+export function Unlock(arg1:string):Promise<void>;
 
 export function UpdatePassword(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<string>;

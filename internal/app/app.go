@@ -34,6 +34,8 @@ type App struct {
 	store    *store.Store
 	unlocked bool
 
+	keyDisk []byte
+
 	lastActivity time.Time
 	stopTimer    chan struct{}
 
@@ -144,19 +146,36 @@ func (a *App) StoredStores() []string {
 	return out
 }
 
-// ImportPGPKey imports an armored secret OpenPGP key. The passphrase is
-// validated; only the original (still passphrase-protected) armored block is
-// stored locally, sealed by the vault. Importing does not start an unlocked
-// session: local secrets stay gated on an explicit Unlock.
-func (a *App) ImportPGPKey(block, passphrase []byte) ([]*pgp.KeyInfo, error) {
-	infos, err := a.pgpSvc.ImportSecret(block, passphrase)
+// ImportPGPKey imports an armored secret OpenPGP key. The key's own passphrase
+// (keyPassphrase, which may be empty for unarmored keys) is validated; the
+// original armored block plus that passphrase are stored locally, sealed by the
+// vault using key_disk = KDF(lockPassword). lockPassword is mandatory and
+// non-empty so every stored key is always protected, even when the key itself
+// has an empty passphrase. Importing does not start an unlocked session: local
+// secrets stay gated on an explicit Unlock.
+func (a *App) ImportPGPKey(block, keyPassphrase, lockPassword []byte) ([]*pgp.KeyInfo, error) {
+	if len(lockPassword) == 0 {
+		return nil, errors.New("a non-empty lock password is required to import a key")
+	}
+	infos, err := a.pgpSvc.ImportSecret(block, keyPassphrase)
 	if err != nil {
 		return nil, err
 	}
-	if err := a.vault.Store(a.paths.PGPKeyFile, block); err != nil {
+	key, err := a.deriveKeyDisk(lockPassword)
+	if err != nil {
+		return nil, err
+	}
+	defer security.Zero(key)
+	payload, err := packKeyMaterial(keyPassphrase, block)
+	if err != nil {
+		return nil, err
+	}
+	defer security.Zero(payload)
+	if err := a.vault.Store(key, a.paths.PGPKeyFile, payload); err != nil {
 		return nil, fmt.Errorf("unable to store the OpenPGP key locally: %v", err)
 	}
 	a.mu.Lock()
+	a.keyDisk = append(a.keyDisk[:0], key...)
 	a.cfg.PGPKeyFingerprint = infos[0].Fingerprint
 	a.mu.Unlock()
 	if err := a.saveConfig(); err != nil {
@@ -166,18 +185,34 @@ func (a *App) ImportPGPKey(block, passphrase []byte) ([]*pgp.KeyInfo, error) {
 }
 
 // ImportSSHKey imports an OpenSSH private key. The original file bytes (still
-// encrypted with their passphrase) are stored locally, sealed by the vault.
-// The decrypted signer is kept in memory so transport operations (clone) work
-// without a full session unlock, but the session itself stays locked.
-func (a *App) ImportSSHKey(pem, passphrase []byte) (*sshx.SSHKey, error) {
-	k, err := sshx.ImportPrivateKey(pem, passphrase)
+// encrypted with their own keyPassphrase, which may be empty) plus that
+// passphrase are stored locally, sealed by the vault using
+// key_disk = KDF(lockPassword). The decrypted signer is kept in memory so
+// transport operations (clone) work without a full session unlock, but the
+// session itself stays locked.
+func (a *App) ImportSSHKey(pem, keyPassphrase, lockPassword []byte) (*sshx.SSHKey, error) {
+	if len(lockPassword) == 0 {
+		return nil, errors.New("a non-empty lock password is required to import a key")
+	}
+	k, err := sshx.ImportPrivateKey(pem, keyPassphrase)
 	if err != nil {
 		return nil, err
 	}
-	if err := a.vault.Store(a.paths.SSHKeyFile, pem); err != nil {
+	key, err := a.deriveKeyDisk(lockPassword)
+	if err != nil {
+		return nil, err
+	}
+	defer security.Zero(key)
+	payload, err := packKeyMaterial(keyPassphrase, pem)
+	if err != nil {
+		return nil, err
+	}
+	defer security.Zero(payload)
+	if err := a.vault.Store(key, a.paths.SSHKeyFile, payload); err != nil {
 		return nil, fmt.Errorf("unable to store the SSH key locally: %v", err)
 	}
 	a.mu.Lock()
+	a.keyDisk = append(a.keyDisk[:0], key...)
 	a.sshKey = k
 	a.cfg.SSHKeyID = k.Fingerprint()
 	a.mu.Unlock()
@@ -187,15 +222,21 @@ func (a *App) ImportSSHKey(pem, passphrase []byte) (*sshx.SSHKey, error) {
 	return k, nil
 }
 
-// Unlock loads and decrypts the stored keys into memory. Each key's passphrase
-// is validated at this point. Nil passphrases are treated as empty.
-func (a *App) Unlock(pgpPass, sshPass []byte) error {
+// Unlock loads and decrypts the stored keys into memory using the single
+// mandatory lock password. Unlocking with the correct lock password
+// automatically recovers each key's own passphrase (stored inside the sealed
+// blob), so the user types one password regardless of how the individual keys
+// are protected.
+func (a *App) Unlock(lockPassword []byte) error {
+	if len(lockPassword) == 0 {
+		return errors.New("a non-empty lock password is required to unlock")
+	}
 	a.mu.Lock()
-	if err := a.unlockPGPLocked(pgpPass); err != nil {
+	if err := a.unlockPGPLocked(lockPassword); err != nil {
 		a.mu.Unlock()
 		return err
 	}
-	if err := a.unlockSSHLocked(sshPass); err != nil {
+	if err := a.unlockSSHLocked(lockPassword); err != nil {
 		a.mu.Unlock()
 		return err
 	}
@@ -210,11 +251,13 @@ func (a *App) Unlock(pgpPass, sshPass []byte) error {
 	return nil
 }
 
-// UnlockPGP unlocks only the stored OpenPGP key. No SSH key is loaded; remote
-// git operations will fail until UnlockSSH is called.
-func (a *App) UnlockPGP(pgpPass []byte) error {
+// UnlockPGP unlocks only the stored OpenPGP key using the lock password.
+func (a *App) UnlockPGP(lockPassword []byte) error {
+	if len(lockPassword) == 0 {
+		return errors.New("a non-empty lock password is required to unlock")
+	}
 	a.mu.Lock()
-	if err := a.unlockPGPLocked(pgpPass); err != nil {
+	if err := a.unlockPGPLocked(lockPassword); err != nil {
 		a.mu.Unlock()
 		return err
 	}
@@ -229,10 +272,13 @@ func (a *App) UnlockPGP(pgpPass []byte) error {
 	return nil
 }
 
-// UnlockSSH unlocks only the stored SSH key.
-func (a *App) UnlockSSH(sshPass []byte) error {
+// UnlockSSH unlocks only the stored SSH key using the lock password.
+func (a *App) UnlockSSH(lockPassword []byte) error {
+	if len(lockPassword) == 0 {
+		return errors.New("a non-empty lock password is required to unlock")
+	}
 	a.mu.Lock()
-	if err := a.unlockSSHLocked(sshPass); err != nil {
+	if err := a.unlockSSHLocked(lockPassword); err != nil {
 		a.mu.Unlock()
 		return err
 	}
@@ -246,41 +292,66 @@ func (a *App) UnlockSSH(sshPass []byte) error {
 // LoadStoredSSHKey decrypts the stored SSH key into memory for transport
 // operations (clone, sync) without starting an unlocked session. The session
 // stays locked until an explicit Unlock.
-func (a *App) LoadStoredSSHKey(passphrase []byte) error {
+func (a *App) LoadStoredSSHKey(lockPassword []byte) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.HasStoredSSHKey() {
 		return errors.New("no SSH key is stored; import one first")
 	}
-	return a.unlockSSHLocked(passphrase)
+	return a.unlockSSHLocked(lockPassword)
 }
 
-func (a *App) unlockPGPLocked(pgpPass []byte) error {
+func (a *App) unlockPGPLocked(lockPassword []byte) error {
 	if !a.HasStoredPGPKey() {
 		return nil
 	}
-	armored, err := a.vault.LoadSealed(a.paths.PGPKeyFile)
+	key, err := a.deriveKeyDisk(lockPassword)
+	if err != nil {
+		return err
+	}
+	defer security.Zero(key)
+	payload, err := a.vault.LoadSealed(key, a.paths.PGPKeyFile)
 	if err != nil {
 		return fmt.Errorf("unable to read the stored OpenPGP key: %v", err)
 	}
-	defer security.Zero(armored)
-	return a.pgpSvc.Unlock(armored, pgpPass)
+	defer security.Zero(payload)
+	keyPass, armored, err := unpackKeyMaterial(payload)
+	if err != nil {
+		return fmt.Errorf("unable to read the stored OpenPGP key: %v", err)
+	}
+	defer security.Zero(keyPass)
+	if err := a.pgpSvc.Unlock(armored, keyPass); err != nil {
+		return err
+	}
+	a.setKeyDisk(key)
+	return nil
 }
 
-func (a *App) unlockSSHLocked(sshPass []byte) error {
+func (a *App) unlockSSHLocked(lockPassword []byte) error {
 	if !a.HasStoredSSHKey() {
 		return nil
 	}
-	pem, err := a.vault.LoadSealed(a.paths.SSHKeyFile)
+	key, err := a.deriveKeyDisk(lockPassword)
+	if err != nil {
+		return err
+	}
+	defer security.Zero(key)
+	payload, err := a.vault.LoadSealed(key, a.paths.SSHKeyFile)
 	if err != nil {
 		return fmt.Errorf("unable to read the stored SSH key: %v", err)
 	}
-	defer security.Zero(pem)
-	k, err := sshx.ImportPrivateKey(pem, sshPass)
+	defer security.Zero(payload)
+	keyPass, pem, err := unpackKeyMaterial(payload)
+	if err != nil {
+		return fmt.Errorf("unable to read the stored SSH key: %v", err)
+	}
+	defer security.Zero(keyPass)
+	k, err := sshx.ImportPrivateKey(pem, keyPass)
 	if err != nil {
 		return err
 	}
 	a.sshKey = k
+	a.setKeyDisk(key)
 	return nil
 }
 
@@ -379,7 +450,62 @@ func (a *App) lockLocked() {
 	a.sshKey = nil
 	a.store = nil
 	a.unlocked = false
+	security.Zero(a.keyDisk)
+	a.keyDisk = nil
 }
+
+// setKeyDisk stores a copy of the derived vault key in memory. The caller must
+// still wipe the source; setKeyDisk retains its own copy for the session.
+func (a *App) setKeyDisk(key []byte) {
+	security.Zero(a.keyDisk)
+	a.keyDisk = append(a.keyDisk[:0], key...)
+}
+
+// deriveKeyDisk computes key_disk = Argon2id(passphrase, salt) using the
+// on-disk vault salt. The returned key must be wiped by the caller.
+func (a *App) deriveKeyDisk(passphrase []byte) ([]byte, error) {
+	salt, err := a.vault.LoadOrCreateSalt()
+	if err != nil {
+		return nil, err
+	}
+	defer security.Zero(salt)
+	return security.DeriveKey(passphrase, salt), nil
+}
+
+// packKeyMaterial encodes a key's own passphrase together with its (still
+// passphrase-encrypted) material so that a single lock password suffices to
+// unlock every stored key. Format: version(1) || passLen(2, big-endian) ||
+// passphrase || material.
+func packKeyMaterial(keyPassphrase, material []byte) ([]byte, error) {
+	if len(keyPassphrase) > 65535 {
+		return nil, errors.New("key passphrase is too long")
+	}
+	out := make([]byte, 0, 1+2+len(keyPassphrase)+len(material))
+	out = append(out, keyBlobVersion)
+	out = append(out, byte(len(keyPassphrase)>>8), byte(len(keyPassphrase)))
+	out = append(out, keyPassphrase...)
+	out = append(out, material...)
+	return out, nil
+}
+
+// unpackKeyMaterial reverses packKeyMaterial, returning the key's own
+// passphrase and its material.
+func unpackKeyMaterial(payload []byte) (keyPassphrase, material []byte, err error) {
+	if len(payload) < 3 || payload[0] != keyBlobVersion {
+		return nil, nil, errors.New("unsupported or corrupt sealed key blob")
+	}
+	passLen := int(payload[1])<<8 | int(payload[2])
+	if 3+passLen > len(payload) {
+		return nil, nil, errors.New("corrupt sealed key blob")
+	}
+	keyPassphrase = payload[3 : 3+passLen]
+	material = payload[3+passLen:]
+	return keyPassphrase, material, nil
+}
+
+// keyBlobVersion is the version tag for sealed key blobs that package a key's
+// own passphrase with its material under the single lock-password model.
+const keyBlobVersion = 1
 
 func (a *App) touchLocked() {
 	a.lastActivity = time.Now()
@@ -946,32 +1072,6 @@ func (a *App) Status() (string, error) {
 		}
 	}
 	return b.String(), nil
-}
-
-// PGPKeyNeedsPassphrase reports whether the stored PGP key is passphrase-protected.
-func (a *App) PGPKeyNeedsPassphrase() (bool, error) {
-	if !a.HasStoredPGPKey() {
-		return false, nil
-	}
-	armored, err := a.vault.LoadSealed(a.paths.PGPKeyFile)
-	if err != nil {
-		return false, err
-	}
-	defer security.Zero(armored)
-	return pgp.BlockRequiresPassphrase(armored)
-}
-
-// SSHKeyNeedsPassphrase reports whether the stored SSH key is encrypted.
-func (a *App) SSHKeyNeedsPassphrase() (bool, error) {
-	if !a.HasStoredSSHKey() {
-		return false, nil
-	}
-	pem, err := a.vault.LoadSealed(a.paths.SSHKeyFile)
-	if err != nil {
-		return false, err
-	}
-	defer security.Zero(pem)
-	return sshx.PrivateKeyRequiresPassphrase(pem)
 }
 
 // SetGitAuthor persists the author identity used for commits.

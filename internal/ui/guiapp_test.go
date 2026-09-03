@@ -22,6 +22,7 @@ import (
 )
 
 const testPassphrase = "ui-test-pass"
+const testLockPass = "ui-test-lock"
 
 func newTestGUI(t *testing.T) *GUI {
 	t.Helper()
@@ -125,7 +126,7 @@ func TestLockUnlock(t *testing.T) {
 	if err := os.WriteFile(path, block, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.core.ImportPGPKey(block, []byte(testPassphrase)); err != nil {
+	if _, err := g.core.ImportPGPKey(block, []byte(testPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -138,7 +139,7 @@ func TestLockUnlock(t *testing.T) {
 	if err := g.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
 	}
-	if err := g.Unlock(testPassphrase, ""); err != nil {
+	if err := g.Unlock(testLockPass); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	if !g.IsUnlocked() {
@@ -152,10 +153,10 @@ func TestLockUnlock(t *testing.T) {
 
 func TestLoadSSHKey(t *testing.T) {
 	g := newTestGUI(t)
-	if _, err := g.core.ImportSSHKey(sshPEM(t), nil); err != nil {
+	if _, err := g.core.ImportSSHKey(sshPEM(t), nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
-	if err := g.LoadSSHKey(""); err != nil {
+	if err := g.LoadSSHKey(testLockPass); err != nil {
 		t.Fatalf("LoadSSHKey: %v", err)
 	}
 	if !g.HasSSHKeyLoaded() {
@@ -226,7 +227,7 @@ func TestImportKeyFiles(t *testing.T) {
 	if err := os.WriteFile(pgpPath, block, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	msg, err := g.ImportPGPKeyFile(pgpPath, testPassphrase)
+	msg, err := g.ImportPGPKeyFile(pgpPath, testPassphrase, testLockPass)
 	if err != nil {
 		t.Fatalf("ImportPGPKeyFile: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestImportKeyFiles(t *testing.T) {
 	if err := os.WriteFile(sshPath, sshPEM(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	msg, err = g.ImportSSHKeyFile(sshPath, "")
+	msg, err = g.ImportSSHKeyFile(sshPath, "", testLockPass)
 	if err != nil {
 		t.Fatalf("ImportSSHKeyFile: %v", err)
 	}
@@ -274,7 +275,7 @@ func setupUnlockedStore(t *testing.T) (*GUI, string) {
 	g := newTestGUI(t)
 	block := armoredPGPKey(t)
 	fp := pgpFingerprint(block)
-	if _, err := g.core.ImportPGPKey(block, []byte(testPassphrase)); err != nil {
+	if _, err := g.core.ImportPGPKey(block, []byte(testPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	storeDir := filepath.Join(t.TempDir(), "pass")
@@ -287,7 +288,7 @@ func setupUnlockedStore(t *testing.T) (*GUI, string) {
 	if err := g.OpenLocalStore(storeDir); err != nil {
 		t.Fatalf("OpenLocalStore: %v", err)
 	}
-	if err := g.Unlock(testPassphrase, ""); err != nil {
+	if err := g.Unlock(testLockPass); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
 	return g, storeDir

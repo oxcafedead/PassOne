@@ -63,10 +63,11 @@ func (g *GUI) IsUnlocked() bool { return g.core.IsUnlocked() }
 // Lock drops all decrypted keys from memory.
 func (g *GUI) Lock() { g.core.Lock() }
 
-// Unlock validates the stored key passphrases. Empty strings are treated as
-// no passphrase (relevant for unprotected keys).
-func (g *GUI) Unlock(pgpPass, sshPass string) error {
-	return g.core.Unlock([]byte(pgpPass), []byte(sshPass))
+// Unlock validates and loads the stored keys using the single mandatory lock
+// password. Each key's own passphrase is recovered automatically from the
+// sealed vault.
+func (g *GUI) Unlock(lockPassword string) error {
+	return g.core.Unlock([]byte(lockPassword))
 }
 
 // HasSSHKeyLoaded reports whether the SSH signer is in memory for transport.
@@ -75,8 +76,8 @@ func (g *GUI) HasSSHKeyLoaded() bool { return g.core.HasSSHKeyLoaded() }
 // LoadSSHKey decrypts the stored SSH key into memory without starting an
 // unlocked session. Used by onboarding to make cloning possible after a
 // restart, before the user deliberately unlocks.
-func (g *GUI) LoadSSHKey(sshPass string) error {
-	return g.core.LoadStoredSSHKey([]byte(sshPass))
+func (g *GUI) LoadSSHKey(lockPassword string) error {
+	return g.core.LoadStoredSSHKey([]byte(lockPassword))
 }
 
 // HasStoredPGPKey reports whether a secret OpenPGP key was imported.
@@ -261,14 +262,15 @@ func (g *GUI) PickStoreDir() (Picked, error) {
 }
 
 // ImportPGPKeyFile imports an on-disk ASCII-armored OpenPGP private key. The
-// file bytes are wiped from memory after import.
-func (g *GUI) ImportPGPKeyFile(path, passphrase string) (string, error) {
+// file bytes are wiped from memory after import. lockPassword seals the stored
+// key (and every stored key) in the vault.
+func (g *GUI) ImportPGPKeyFile(path, passphrase, lockPassword string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 	defer security.Zero(data)
-	infos, err := g.core.ImportPGPKey(data, []byte(passphrase))
+	infos, err := g.core.ImportPGPKey(data, []byte(passphrase), []byte(lockPassword))
 	if err != nil {
 		return "", err
 	}
@@ -279,13 +281,13 @@ func (g *GUI) ImportPGPKeyFile(path, passphrase string) (string, error) {
 }
 
 // ImportSSHKeyFile imports an on-disk OpenSSH private key.
-func (g *GUI) ImportSSHKeyFile(path, passphrase string) (string, error) {
+func (g *GUI) ImportSSHKeyFile(path, passphrase, lockPassword string) (string, error) {
 	pem, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 	defer security.Zero(pem)
-	k, err := g.core.ImportSSHKey(pem, []byte(passphrase))
+	k, err := g.core.ImportSSHKey(pem, []byte(passphrase), []byte(lockPassword))
 	if err != nil {
 		return "", err
 	}

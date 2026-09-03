@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -16,10 +17,11 @@ import (
 
 // env carries the application instance and streams so commands are testable.
 type env struct {
-	app    *app.App
-	stdin  *os.File
-	stdout *os.File
-	stderr *os.File
+	app     *app.App
+	stdin   *os.File
+	stdout  *os.File
+	stderr  *os.File
+	stdinBr *bufio.Reader
 }
 
 func createApp() (*app.App, error) {
@@ -81,7 +83,12 @@ func cmdImportPGP(e *env, args []string) error {
 	defer zero(block)
 
 	e.println("Parsing key...")
-	infos, err := e.app.ImportPGPKey(block, readPassphrase(e, "OpenPGP key passphrase: "))
+	lockPass := readPassphrase(e, "Lock password (used to seal all stored keys): ")
+	if len(lockPass) == 0 {
+		return errors.New("a non-empty lock password is required")
+	}
+	defer zero(lockPass)
+	infos, err := e.app.ImportPGPKey(block, readPassphrase(e, "OpenPGP key passphrase (may be empty): "), lockPass)
 	if err != nil {
 		return err
 	}
@@ -101,7 +108,12 @@ func cmdImportSSH(e *env, args []string) error {
 	}
 	defer zero(pem)
 
-	k, err := e.app.ImportSSHKey(pem, readPassphrase(e, "SSH key passphrase: "))
+	lockPass := readPassphrase(e, "Lock password (used to seal all stored keys): ")
+	if len(lockPass) == 0 {
+		return errors.New("a non-empty lock password is required")
+	}
+	defer zero(lockPass)
+	k, err := e.app.ImportSSHKey(pem, readPassphrase(e, "SSH key passphrase (may be empty): "), lockPass)
 	if err != nil {
 		return err
 	}
@@ -374,7 +386,7 @@ func cmdSync(e *env, _ []string) error {
 	return nil
 }
 
-func cmdUnlock(e *env, _ []string) error {
+func cmdUnlock(e *env, args []string) error {
 	if e.app.IsUnlocked() {
 		e.println("Already unlocked.")
 		return nil
@@ -424,25 +436,19 @@ func ensureUnlocked(e *env) error {
 }
 
 // ensurePGPUnlocked unlocks only the OpenPGP key. Used for local operations
-// (show/copy/save/edit) that do not touch git.
+// (show/copy/save/edit) that do not touch git. Under the single lock-password
+// model the user enters the one lock password; each key's own passphrase is
+// recovered automatically from the sealed vault.
 func ensurePGPUnlocked(e *env) error {
 	if e.app.IsUnlocked() {
 		return nil
 	}
-	var pgpPass []byte
-	if e.app.HasStoredPGPKey() {
-		need, err := e.app.PGPKeyNeedsPassphrase()
-		if err != nil {
-			return err
-		}
-		if need {
-			pgpPass = readPassphrase(e, "OpenPGP key passphrase: ")
-			if len(pgpPass) == 0 {
-				return fmt.Errorf("the OpenPGP key is passphrase-protected; a passphrase is required")
-			}
-		}
+	lockPass := readPassphrase(e, "Lock password: ")
+	if len(lockPass) == 0 {
+		return errors.New("a non-empty lock password is required")
 	}
-	if err := e.app.UnlockPGP(pgpPass); err != nil {
+	defer zero(lockPass)
+	if err := e.app.UnlockPGP(lockPass); err != nil {
 		return err
 	}
 	return nil
@@ -455,50 +461,24 @@ func ensureSSHUnlocked(e *env) error {
 	if e.app.HasSSHKeyLoaded() {
 		return nil
 	}
-	var sshPass []byte
-	if e.app.HasStoredSSHKey() {
-		need, err := e.app.SSHKeyNeedsPassphrase()
-		if err != nil {
-			return err
-		}
-		if need {
-			sshPass = readPassphrase(e, "SSH key passphrase: ")
-			if len(sshPass) == 0 {
-				return fmt.Errorf("the SSH key is passphrase-protected; a passphrase is required")
-			}
-		}
+	lockPass := readPassphrase(e, "Lock password: ")
+	if len(lockPass) == 0 {
+		return errors.New("a non-empty lock password is required")
 	}
-	if err := e.app.UnlockSSH(sshPass); err != nil {
+	defer zero(lockPass)
+	if err := e.app.UnlockSSH(lockPass); err != nil {
 		return err
 	}
 	return nil
 }
 
 func unlockPrompt(e *env) error {
-	var pgpPass, sshPass []byte
-
-	if e.app.HasStoredPGPKey() {
-		need, err := e.app.PGPKeyNeedsPassphrase()
-		if err != nil {
-			return err
-		}
-		if need {
-			pgpPass = readPassphrase(e, "OpenPGP key passphrase: ")
-		}
+	lockPass := readPassphrase(e, "Lock password: ")
+	if len(lockPass) == 0 {
+		return errors.New("a non-empty lock password is required")
 	}
-	if e.app.HasStoredSSHKey() {
-		need, err := e.app.SSHKeyNeedsPassphrase()
-		if err != nil {
-			return err
-		}
-		if need {
-			sshPass = readPassphrase(e, "SSH key passphrase: ")
-			if len(sshPass) == 0 {
-				return fmt.Errorf("the SSH key is passphrase-protected; a passphrase is required")
-			}
-		}
-	}
-	if err := e.app.Unlock(pgpPass, sshPass); err != nil {
+	defer zero(lockPass)
+	if err := e.app.Unlock(lockPass); err != nil {
 		return err
 	}
 	return nil
@@ -515,8 +495,10 @@ func readPassphrase(e *env, prompt string) []byte {
 		e.println()
 		return p
 	}
-	r := bufio.NewReader(e.stdin)
-	line, _ := r.ReadBytes('\n')
+	if e.stdinBr == nil {
+		e.stdinBr = bufio.NewReader(e.stdin)
+	}
+	line, _ := e.stdinBr.ReadBytes('\n')
 	if len(line) > 0 && line[len(line)-1] == '\n' {
 		line = line[:len(line)-1]
 	}

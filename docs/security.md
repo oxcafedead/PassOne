@@ -9,9 +9,6 @@ Security model, threat boundaries, and accepted risks of passone.
 - Every disk-resident secret is wrapped in a vault layer: `Seal(key_disk, …)`
   with AES-256-GCM, where `key_disk = Argon2id(master_passphrase)` is derived in
   memory on every unlock and never written to disk.
-- Master passphrase entry may be replaced by Windows Hello (biometrics/PIN) when
-  available and enabled. See
-  [docs/windows-hello-architecture.md](windows-hello-architecture.md).
 
 ## Accepted boundaries (threat model)
 
@@ -33,27 +30,13 @@ OS.
 
 Because `key_disk = Argon2id(master_passphrase)`, the strength of protection for
 unarmored (passphrase-less) keys is bounded by the master passphrase. A weak
-passphrase under offline guessing against `hello.bin` or sealed files yields weak
+passphrase under offline guessing against the sealed vault files yields weak
 protection of unarmored keys.
 
 Mitigation: a high Argon2id memory/time cost, plus enforced master-passphrase
 strength whenever passphrase-less keys are stored.
 
-### 3. No hardware TPM means software-grade protection
-
-On machines without a TPM, Windows Hello runs in software/VSM mode rather than
-hardware-backed. Protection is tied to the account (VSM) and is weaker than
-hardware TPM isolation. The GUI honestly reports the detected protection level.
-
-### 4. Fake Hello prompt (phishing)
-
-Malware may present a forged dialog that looks like the Windows Hello prompt and
-deceive a user into typing their passphrase. The real dialog invoked through
-`NCrypt` is system-provided and hard to forge, but window-phishing of the user is
-still possible. Users must confirm a native/system dialog before entering
-anything.
-
-### 5. In-memory lifetime during unlock and migration
+### 3. In-memory lifetime during unlock and migration
 
 Decrypted material exists in memory between unlock and use, and the previous
 `app.key` remains in memory briefly during migration (a window between reading the
@@ -69,10 +52,3 @@ for that interval.
   `internal/security.Zero` as soon as they are no longer needed.
 - **Isolation of the key-owning layer.** The code that holds secrets is kept thin
   and isolated to minimize attack surface.
-- **Optional, honest biometric unlock.** Windows Hello is an optional layer over
-  passphrase entry; all four support scenarios (no Hello / Hello off / Hello+TPM
-  / Hello without TPM) are handled, with honest reporting.
-
-## Related
-
-- [Windows Hello target architecture](windows-hello-architecture.md)
