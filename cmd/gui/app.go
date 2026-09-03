@@ -21,6 +21,11 @@ func (a *App) IsUnlocked() bool { return a.gui.IsUnlocked() }
 // Unlock validates and loads the stored keys using the single lock password.
 func (a *App) Unlock(lockPassword string) error { return a.gui.Unlock(lockPassword) }
 
+// ChangeLockPassword replaces the lock password, re-sealing the stored keys.
+func (a *App) ChangeLockPassword(newPassword string) error {
+	return a.gui.ChangeLockPassword(newPassword)
+}
+
 // Lock drops all decrypted keys from memory.
 func (a *App) Lock() { a.gui.Lock() }
 

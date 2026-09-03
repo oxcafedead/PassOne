@@ -174,6 +174,40 @@ func TestImportUnlockDecryptFlow(t *testing.T) {
 	}
 }
 
+func TestChangeLockPassword(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	infos, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass))
+	if err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if len(infos) == 0 {
+		t.Fatal("no keys imported")
+	}
+
+	if err := a.ChangeLockPassword(nil); err == nil {
+		t.Fatal("ChangeLockPassword with an empty password should fail")
+	}
+	if err := a.ChangeLockPassword([]byte("new-lock-pass")); err == nil {
+		t.Fatal("ChangeLockPassword while locked should fail")
+	}
+
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := a.ChangeLockPassword([]byte("new-lock-pass")); err != nil {
+		t.Fatalf("ChangeLockPassword: %v", err)
+	}
+
+	a.Lock()
+	if err := a.Unlock([]byte(testLockPass)); err == nil {
+		t.Fatal("old lock password should no longer work after change")
+	}
+	if err := a.Unlock([]byte("new-lock-pass")); err != nil {
+		t.Fatalf("Unlock with new password: %v", err)
+	}
+}
+
 func TestListWithoutUnlock(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)

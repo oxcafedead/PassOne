@@ -6,6 +6,8 @@ export function AppInfo():Promise<Record<string, string>>;
 
 export function ClipboardClearSeconds():Promise<number>;
 
+export function ChangeLockPassword(arg1:string):Promise<void>;
+
 export function CloneStore(arg1:string,arg2:string):Promise<void>;
 
 export function CopyPassword(arg1:string):Promise<void>;

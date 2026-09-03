@@ -385,6 +385,11 @@ func (g *GUI) CurrentSettings() SettingsInfo {
 // SetAutoLock updates the idle auto-lock timeout (0 disables it).
 func (g *GUI) SetAutoLock(minutes int) error { return g.core.SetAutoLock(minutes) }
 
+// ChangeLockPassword replaces the lock password, re-sealing the stored keys.
+func (g *GUI) ChangeLockPassword(newPassword string) error {
+	return g.core.ChangeLockPassword([]byte(newPassword))
+}
+
 // SetClipboardClear updates how long copied secrets stay on the clipboard.
 func (g *GUI) SetClipboardClear(seconds int) error { return g.core.SetClipboardClear(seconds) }
 

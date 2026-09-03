@@ -1105,6 +1105,50 @@ func (a *App) SetClipboardClear(seconds int) error {
 	return a.saveConfig()
 }
 
+// ChangeLockPassword replaces the lock password by re-sealing every stored key
+// (OpenPGP and SSH) under a key derived from newPassword. It must be called
+// while unlocked, so the current key_disk is available to open the existing
+// blobs; the vault salt is unchanged. On success the in-memory key is replaced
+// with the one derived from newPassword, keeping this session unlocked.
+func (a *App) ChangeLockPassword(newPassword []byte) error {
+	if len(newPassword) == 0 {
+		return errors.New("a non-empty lock password is required")
+	}
+	if !a.IsUnlocked() {
+		return ErrLocked
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	newKey, err := a.deriveKeyDisk(newPassword)
+	if err != nil {
+		return err
+	}
+	defer security.Zero(newKey)
+
+	for _, f := range []struct{ name, path string }{
+		{"OpenPGP", a.paths.PGPKeyFile},
+		{"SSH", a.paths.SSHKeyFile},
+	} {
+		if !fileExists(f.path) {
+			continue
+		}
+		payload, err := a.vault.LoadSealed(a.keyDisk, f.path)
+		if err != nil {
+			return fmt.Errorf("unable to re-seal the stored %s key: %w", f.name, err)
+		}
+		err = a.vault.Store(newKey, f.path, payload)
+		security.Zero(payload)
+		if err != nil {
+			return fmt.Errorf("unable to re-seal the stored %s key: %w", f.name, err)
+		}
+	}
+
+	security.Zero(a.keyDisk)
+	a.keyDisk = append(a.keyDisk[:0], newKey...)
+	return nil
+}
+
 // CloneHostport extracts the host:22 hostport for a git SSH URL so the host
 // key can be checked and trusted before cloning.
 func (a *App) CloneHostport(url string) (string, error) {

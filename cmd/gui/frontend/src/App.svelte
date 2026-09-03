@@ -23,6 +23,7 @@
     TrustHost,
     CloneStore,
     CurrentSettings,
+    ChangeLockPassword,
     SetAutoLock,
     SetClipboardClear,
     SetGitAuthor,
@@ -114,6 +115,12 @@ let lockPass: string = ''
   let cloneBusy: boolean = false
   let clonePrep: ClonePrep | null = null
   let prefsBusy: boolean = false
+  let cpwOld: string = ''
+  let cpwNew: string = ''
+  let cpwConfirm: string = ''
+  let cpwBusy: boolean = false
+  let cpwMsg: string = ''
+  let cpwErr: string = ''
   let gitText: string = ''
   let gitBusy: boolean = false
   let hosts: string[] = []
@@ -783,6 +790,28 @@ let lockPass: string = ''
       error = String(e)
     } finally {
       busy = false
+    }
+  }
+
+  async function changePassword(): Promise<void> {
+    cpwErr = ''
+    cpwMsg = ''
+    if (cpwNew !== cpwConfirm) {
+      cpwErr = 'New password and confirmation do not match'
+      return
+    }
+    cpwBusy = true
+    try {
+      await ChangeLockPassword(cpwNew)
+      cpwOld = ''
+      cpwNew = ''
+      cpwConfirm = ''
+      cpwMsg = 'Lock password changed'
+      flash('Lock password changed')
+    } catch (e) {
+      cpwErr = String(e)
+    } finally {
+      cpwBusy = false
     }
   }
 
@@ -1561,6 +1590,45 @@ let lockPass: string = ''
           class="btn-accent rounded-lg px-3 py-2 text-sm"
         >
           {prefsBusy ? 'Saving…' : 'Save preferences'}
+        </button>
+      </section>
+
+      <section class="flex flex-col gap-2">
+        <h4 class="text-mute text-xs font-semibold tracking-wide uppercase">Lock password</h4>
+        <p class="text-faint text-xs">The lock password protects every stored key. Changing it re-seals all of them.</p>
+        <input
+          type="password"
+          bind:value={cpwOld}
+          placeholder="Current lock password"
+          autocomplete="current-password"
+          class="input rounded-lg px-3 py-2 text-sm"
+        />
+        <input
+          type="password"
+          bind:value={cpwNew}
+          placeholder="New lock password"
+          autocomplete="new-password"
+          class="input rounded-lg px-3 py-2 text-sm"
+        />
+        <input
+          type="password"
+          bind:value={cpwConfirm}
+          placeholder="Confirm new lock password"
+          autocomplete="new-password"
+          class="input rounded-lg px-3 py-2 text-sm"
+        />
+        {#if cpwErr}
+          <p class="text-danger text-xs break-words">{cpwErr}</p>
+        {/if}
+        {#if cpwMsg}
+          <p class="text-success text-xs break-words">{cpwMsg}</p>
+        {/if}
+        <button
+          on:click={changePassword}
+          disabled={cpwBusy || !cpwOld || !cpwNew || !cpwConfirm}
+          class="btn-accent rounded-lg px-3 py-2 text-sm"
+        >
+          {cpwBusy ? 'Changing…' : 'Change lock password'}
         </button>
       </section>
 
