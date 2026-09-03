@@ -88,6 +88,7 @@ let lockPass: string = ''
   let edError: string = ''
   let armDelete: boolean = false
   let status: string = ''
+  let statusError: boolean = false
   let statusTimer: ReturnType<typeof setTimeout> | null = null
 
   // Settings / onboarding screen state.
@@ -119,7 +120,6 @@ let lockPass: string = ''
   let cpwNew: string = ''
   let cpwConfirm: string = ''
   let cpwBusy: boolean = false
-  let cpwMsg: string = ''
   let cpwErr: string = ''
   let gitText: string = ''
   let gitBusy: boolean = false
@@ -129,14 +129,15 @@ let lockPass: string = ''
   let onboarding: boolean = false
   let step: number = 0
 
-  function flash(msg: string): void {
+  function flash(msg: string, isError: boolean = false): void {
     status = msg
+    statusError = isError
     if (statusTimer) {
       clearTimeout(statusTimer)
     }
     statusTimer = setTimeout(() => {
       status = ''
-    }, 4500)
+    }, isError ? 6000 : 4500)
   }
 
   $: filtered = entries.filter((e) => e.toLowerCase().includes(query.toLowerCase()))
@@ -282,7 +283,7 @@ let lockPass: string = ''
       // the decrypted detail so the user isn't kicked out of the entry they
       // were viewing.
     } catch (e) {
-      error = String(e)
+      flash(String(e), true)
     } finally {
       listing = false
     }
@@ -299,7 +300,7 @@ let lockPass: string = ''
       revealed = false
       await refresh()
     } catch (e) {
-      error = String(e)
+      flash(String(e), true)
     } finally {
       gitBusy = false
     }
@@ -334,7 +335,7 @@ let lockPass: string = ''
     } catch (e) {
       detail = ''
       revealed = false
-      error = String(e)
+      flash(String(e), true)
     }
   }
 
@@ -351,7 +352,7 @@ let lockPass: string = ''
       copiedName = name
       startCountdown()
     } catch (e) {
-      error = String(e)
+      flash(String(e), true)
     } finally {
       copying = false
     }
@@ -396,7 +397,6 @@ let lockPass: string = ''
     cpwNew = ''
     cpwConfirm = ''
     cpwErr = ''
-    cpwMsg = ''
   }
 
   async function loadSettings(): Promise<void> {
@@ -407,6 +407,7 @@ let lockPass: string = ''
       info.sshKey = sw.hasSsh ? sw.sshKeyId : ''
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     }
     try {
       sshLoaded = (await HasSSHKeyLoaded()) ?? false
@@ -471,7 +472,6 @@ let lockPass: string = ''
     cpwNew = ''
     cpwConfirm = ''
     cpwErr = ''
-    cpwMsg = ''
   }
 
   async function pickPgp(): Promise<void> {
@@ -482,6 +482,7 @@ let lockPass: string = ''
       }
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     }
   }
 
@@ -493,12 +494,14 @@ let lockPass: string = ''
       }
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     }
   }
 
   async function importPgp(): Promise<void> {
     if (!pgpPicked) {
       setupErr = 'Choose a PGP key file first'
+      flash(setupErr, true)
       return
     }
     importBusy = true
@@ -511,6 +514,7 @@ let lockPass: string = ''
       await loadSettings()
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       importBusy = false
     }
@@ -519,6 +523,7 @@ let lockPass: string = ''
   async function importSsh(): Promise<void> {
     if (!sshPicked) {
       setupErr = 'Choose an SSH key file first'
+      flash(setupErr, true)
       return
     }
     importBusy = true
@@ -531,6 +536,7 @@ let lockPass: string = ''
       await loadSettings()
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       importBusy = false
     }
@@ -546,6 +552,7 @@ let lockPass: string = ''
       flash('SSH key loaded')
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       importBusy = false
     }
@@ -564,6 +571,7 @@ let lockPass: string = ''
       await loadSettings()
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       openBusy = false
     }
@@ -578,6 +586,7 @@ let lockPass: string = ''
       await loadSettings()
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       openBusy = false
     }
@@ -587,6 +596,7 @@ let lockPass: string = ''
     const url = cloneUrl.trim()
     if (!url) {
       setupErr = 'Enter a git SSH URL first (git@host:owner/store.git)'
+      flash(setupErr, true)
       return
     }
     cloneBusy = true
@@ -596,6 +606,7 @@ let lockPass: string = ''
       clonePrep = await PrepareClone(url)
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       cloneBusy = false
     }
@@ -604,6 +615,7 @@ let lockPass: string = ''
   async function doClone(): Promise<void> {
     if (!sshLoaded) {
       setupErr = 'Load your SSH key with its passphrase first'
+      flash(setupErr, true)
       return
     }
     if (!clonePrep) {
@@ -627,6 +639,7 @@ let lockPass: string = ''
       }
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       cloneBusy = false
     }
@@ -648,6 +661,7 @@ let lockPass: string = ''
       }
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       prefsBusy = false
     }
@@ -669,6 +683,7 @@ let lockPass: string = ''
       gitText = await Status()
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       gitBusy = false
     }
@@ -685,6 +700,7 @@ let lockPass: string = ''
       await loadSettings()
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     } finally {
       gitBusy = false
     }
@@ -696,6 +712,7 @@ let lockPass: string = ''
       hosts = await KnownHosts()
     } catch (e) {
       setupErr = String(e)
+      flash(setupErr, true)
     }
   }
 
@@ -741,6 +758,7 @@ let lockPass: string = ''
       const keepPassword = edPass.trim() === ''
       if (!keepPassword && edPass !== edConfirm) {
         edError = 'Passwords do not match'
+        flash(edError, true)
         return
       }
       if (editing.mode === 'add') {
@@ -771,6 +789,7 @@ let lockPass: string = ''
       }
     } catch (e) {
       edError = String(e)
+      flash(edError, true)
     } finally {
       edBusy = false
     }
@@ -791,7 +810,7 @@ let lockPass: string = ''
       flash(gone + ' removed')
       await refresh()
     } catch (e) {
-      error = String(e)
+      flash(String(e), true)
     }
   }
 
@@ -803,7 +822,7 @@ let lockPass: string = ''
       lockPass = ''
       await refresh()
     } catch (e) {
-      error = String(e)
+      flash(String(e), true)
     } finally {
       busy = false
     }
@@ -811,9 +830,9 @@ let lockPass: string = ''
 
   async function changePassword(): Promise<void> {
     cpwErr = ''
-    cpwMsg = ''
     if (cpwNew !== cpwConfirm) {
       cpwErr = 'New password and confirmation do not match'
+      flash(cpwErr, true)
       return
     }
     cpwBusy = true
@@ -822,10 +841,10 @@ let lockPass: string = ''
       cpwOld = ''
       cpwNew = ''
       cpwConfirm = ''
-      cpwMsg = 'Lock password changed'
       flash('Lock password changed')
     } catch (e) {
       cpwErr = String(e)
+      flash(cpwErr, true)
     } finally {
       cpwBusy = false
     }
@@ -877,9 +896,6 @@ let lockPass: string = ''
         Lock password
         <input type="password" bind:value={lockPass} autocomplete="current-password" placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
       </label>
-      {#if error}
-        <p class="text-danger text-xs break-words">{error}</p>
-      {/if}
       <button type="submit" disabled={busy} class="btn-accent rounded-lg px-3 py-2 text-sm font-medium">
         {busy ? 'Unlocking…' : 'Unlock'}
       </button>
@@ -924,10 +940,6 @@ let lockPass: string = ''
           </svg>
         </button>
       </div>
-
-      {#if error && !selected}
-        <p class="text-danger text-xs break-words">{error}</p>
-      {/if}
 
       <nav class="flex-1 overflow-y-auto">
         {#if listing}
@@ -1069,9 +1081,6 @@ let lockPass: string = ''
             {armDelete ? 'Confirm delete?' : 'Delete'}
           </button>
         </header>
-        {#if error}
-          <p class="text-danger text-xs break-words">{error}</p>
-        {/if}
         {#if detail}
           <textarea
             readonly
@@ -1167,9 +1176,6 @@ let lockPass: string = ''
             class="input rounded-lg px-3 py-2 font-mono text-xs"
           ></textarea>
         </label>
-        {#if edError}
-          <p class="text-danger text-xs break-words">{edError}</p>
-        {/if}
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
@@ -1197,7 +1203,11 @@ let lockPass: string = ''
 {/if}
 
 {#if status}
-  <div class="panel ring-panel text-main fixed right-4 bottom-4 z-50 rounded-lg px-3 py-2 text-sm">
+  <div
+    class="fixed right-4 bottom-4 z-[60] rounded-lg px-3 py-2 text-sm {statusError
+      ? 'bg-red-500 text-white ring-1 ring-red-500'
+      : 'panel ring-panel text-main'}"
+  >
     {status}
   </div>
 {/if}
@@ -1213,10 +1223,6 @@ let lockPass: string = ''
         </h3>
         <button on:click={closeSettings} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Close</button>
       </div>
-
-      {#if setupErr}
-        <p class="text-danger text-xs break-words mt-2">{setupErr}</p>
-      {/if}
 
       {#if onboarding}
         <div class="flex items-center gap-1.5">
@@ -1622,12 +1628,6 @@ let lockPass: string = ''
           autocomplete="new-password"
           class="input rounded-lg px-3 py-2 text-sm"
         />
-        {#if cpwErr}
-          <p class="text-danger text-xs break-words">{cpwErr}</p>
-        {/if}
-        {#if cpwMsg}
-          <p class="text-success text-xs break-words">{cpwMsg}</p>
-        {/if}
         <button
           on:click={changePassword}
           disabled={cpwBusy || !cpwOld || !cpwNew || !cpwConfirm}
