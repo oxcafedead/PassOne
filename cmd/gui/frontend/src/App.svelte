@@ -1214,6 +1214,10 @@ let lockPass: string = ''
         <button on:click={closeSettings} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Close</button>
       </div>
 
+      {#if setupErr}
+        <p class="text-danger text-xs break-words mt-2">{setupErr}</p>
+      {/if}
+
       {#if onboarding}
         <div class="flex items-center gap-1.5">
           {#each ['Repository', 'Decrypt key', 'Preferences'] as label, i}
@@ -1410,10 +1414,6 @@ let lockPass: string = ''
               </label>
             </div>
           </section>
-        {/if}
-
-        {#if setupErr}
-          <p class="text-danger text-xs break-words">{setupErr}</p>
         {/if}
 
         <div class="mt-1 flex items-center justify-between gap-2">
@@ -1667,9 +1667,6 @@ let lockPass: string = ''
         {/if}
       </section>
 
-      {#if setupErr}
-        <p class="text-danger text-xs break-words">{setupErr}</p>
-      {/if}
       {:else}
         <p class="text-faint text-sm">Unlock PassOne to change settings.</p>
       {/if}
