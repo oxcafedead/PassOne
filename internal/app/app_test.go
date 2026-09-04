@@ -174,6 +174,81 @@ func TestImportUnlockDecryptFlow(t *testing.T) {
 	}
 }
 
+// armoredNoPassphraseKey builds a key whose private key is NOT passphrase
+// protected, mirroring a GnuPG key generated with "no passphrase".
+func armoredNoPassphraseKey(t *testing.T) []byte {
+	t.Helper()
+	cfg := &packet.Config{}
+	e, err := openpgp.NewEntity("No Pass App", "", "nopass-app@example.com", cfg)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.PrivateKeyType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SerializePrivateWithoutSigning(w, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestNoPassphraseImportUnlockDecryptFlow is the regression for "keys cannot be
+// decoded if GPG has no passphrase": a key without a passphrase must import,
+// open a store, unlock from the sealed vault, and decrypt password files.
+func TestNoPassphraseImportUnlockDecryptFlow(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredNoPassphraseKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatalf("ReadArmoredKeyRing: %v", err)
+	}
+	fp := entityFingerprint(el[0])
+
+	if _, err := a.ImportPGPKey(armored, []byte(""), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey with empty passphrase: %v", err)
+	}
+
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	// Unlock reloads the key from the sealed vault blob.
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := a.SavePassword("test/entry", []byte("no-pass-secret\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	out, err := a.ShowPassword("test/entry")
+	if err != nil {
+		t.Fatalf("ShowPassword: %v", err)
+	}
+	if string(out) != "no-pass-secret\n" {
+		t.Fatalf("ShowPassword = %q", out)
+	}
+
+	// Lock and unlock again to exercise the restart path.
+	a.Lock()
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock after lock: %v", err)
+	}
+	out2, err := a.ShowPassword("test/entry")
+	if err != nil {
+		t.Fatalf("ShowPassword after lock/unlock: %v", err)
+	}
+	if string(out2) != "no-pass-secret\n" {
+		t.Fatalf("ShowPassword after lock/unlock = %q", out2)
+	}
+}
+
 func TestChangeLockPassword(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	gperrors "github.com/ProtonMail/go-crypto/openpgp/errors"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/oxcafedead/passone/internal/security"
 )
@@ -87,9 +88,25 @@ func (s *Service) ImportSecret(block []byte, passphrase []byte) ([]*KeyInfo, err
 	if err := unlockEntities(entities, passphrase); err != nil {
 		return nil, err
 	}
+	if !hasSecretMaterial(entities) {
+		return nil, errors.New("the supplied data is a public key only and contains no private key material; import the private (secret) key instead")
+	}
 	s.entities = entities
 	s.setPassphrase(passphrase)
 	return Describe(entities), nil
+}
+
+// hasSecretMaterial reports whether at least one entity in the list carries
+// private key material. A GnuPG "public key" export leaves every private key
+// packet absent, so decrypting passwords is impossible even though the import
+// parses cleanly.
+func hasSecretMaterial(entities []*openpgp.Entity) bool {
+	for _, e := range entities {
+		if e.PrivateKey != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // ArmoredSecret serializes the imported key material back to an ASCII-armored
@@ -254,9 +271,11 @@ func (s *Service) Decrypt(ciphertext []byte) ([]byte, error) {
 		bytes.NewReader(ciphertext),
 		openpgp.EntityList(s.entities),
 		func(_ []openpgp.Key, _ bool) ([]byte, error) {
-			if s.passphrase == nil {
-				return nil, errLocked
-			}
+			// The keyring is already decrypted (we are unlocked), so hand the
+			// in-memory passphrase back to the library. Keys without a passphrase
+			// are unencrypted and never reach this callback; keys encrypted with
+			// an empty passphrase need the empty (non-nil) value so the library
+			// can derive the session key instead of treating it as "locked".
 			return s.passphrase, nil
 		},
 		nil,
@@ -278,6 +297,12 @@ func (s *Service) Decrypt(ciphertext []byte) ([]byte, error) {
 // userError maps low-level crypto errors to user-readable messages without
 // leaking secrets or technical noise.
 func userError(err error) error {
+	if errors.Is(err, errLocked) {
+		return errors.New("the application is locked; run unlock first")
+	}
+	if errors.Is(err, gperrors.ErrKeyIncorrect) {
+		return errors.New("unable to decrypt with the loaded key: the OpenPGP message was not encrypted for the imported key or the key is incomplete")
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "no valid pgp data"):

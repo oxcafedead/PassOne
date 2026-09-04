@@ -10,6 +10,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	gperrors "github.com/ProtonMail/go-crypto/openpgp/errors"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
@@ -48,6 +49,44 @@ func armorSecret(t *testing.T, e *openpgp.Entity) []byte {
 
 func fingerprintOf(e *openpgp.Entity) string {
 	return strings.ToUpper(hex.EncodeToString(e.PrimaryKey.Fingerprint))
+}
+
+// armorPublic serializes only the public parts of an entity, mimicking a GnuPG
+// "export the public key" (`gpg --export --armor`) block.
+func armorPublic(t *testing.T, e *openpgp.Entity) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := e.Serialize(&buf); err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	var out bytes.Buffer
+	w, err := armor.Encode(&out, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode: %v", err)
+	}
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		t.Fatalf("armor write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("armor close: %v", err)
+	}
+	return out.Bytes()
+}
+
+// TestImportRejectsPublicOnlyKey guards against importing a public key export
+// (which parses but contains no private material) as if it were a secret key.
+func TestImportRejectsPublicOnlyKey(t *testing.T) {
+	e := noPassEntity(t)
+	pub := armorPublic(t, e)
+	if _, err := (&Service{}).ImportSecret(pub, []byte("")); err == nil {
+		t.Fatal("expected ImportSecret to reject a public-only key block")
+	} else if !strings.Contains(err.Error(), "private key material") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := (&Service{}).ImportSecret(armorSecret(t, e), []byte("")); err != nil {
+		t.Fatalf("secret key should still import: %v", err)
+	}
 }
 
 func TestBlockRequiresPassphrase(t *testing.T) {
@@ -324,17 +363,19 @@ func TestSinglePrimaryFingerprintMultiple(t *testing.T) {
 
 func TestUserErrorMapping(t *testing.T) {
 	cases := []struct {
-		in   string
+		in   error
 		want string
 	}{
-		{"no valid pgp data", "does not contain a valid OpenPGP message"},
-		{"unable to decrypt session key", "unable to decrypt with the configured key"},
-		{"openpgp: invalid data: modification detected", "integrity check"},
-		{"unknown packet type", "malformed or unsupported OpenPGP packets"},
-		{"something else entirely", "unable to decrypt the password"},
+		{errors.New("no valid pgp data"), "does not contain a valid OpenPGP message"},
+		{errors.New("unable to decrypt session key"), "unable to decrypt with the configured key"},
+		{errors.New("openpgp: invalid data: modification detected"), "integrity check"},
+		{errors.New("unknown packet type"), "malformed or unsupported OpenPGP packets"},
+		{errors.New("something else entirely"), "unable to decrypt the password"},
+		{gperrors.ErrKeyIncorrect, "was not encrypted for the imported key"},
+		{errLocked, "run unlock first"},
 	}
 	for _, tc := range cases {
-		err := userError(errors.New(tc.in))
+		err := userError(tc.in)
 		if !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("userError(%q) = %q, want substring %q", tc.in, err.Error(), tc.want)
 		}
@@ -562,5 +603,104 @@ func TestDescribeSortsUserIDs(t *testing.T) {
 	}
 	if !infos[0].HasSecret {
 		t.Fatal("expected HasSecret true")
+	}
+}
+
+// noPassEntity builds an entity whose private key is NOT passphrase-protected,
+// mirroring a GnuPG key generated with "no passphrase" (%no-protection).
+func noPassEntity(t *testing.T) *openpgp.Entity {
+	t.Helper()
+	e, err := openpgp.NewEntity("No Pass", "", "nopass@example.com", &packet.Config{DefaultCipher: packet.CipherAES256})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	return e
+}
+
+// TestNoPassphraseRoundtrip verifies that a key without a passphrase can be
+// imported, its data encrypted and decrypted. This is the regression for the
+// "keys cannot be decoded if GPG has no passphrase" bug.
+func TestNoPassphraseRoundtrip(t *testing.T) {
+	e := noPassEntity(t)
+	block := armorSecret(t, e)
+
+	svc := &Service{}
+	if _, err := svc.ImportSecret(block, []byte("")); err != nil {
+		t.Fatalf("ImportSecret with empty passphrase: %v", err)
+	}
+	plaintext := []byte("no-passphrase-secret\nurl: https://example.com\n")
+	ciphertext, err := Encrypt(plaintext, []*openpgp.Entity{e})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	got, err := svc.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("roundtrip mismatch: %q != %q", got, plaintext)
+	}
+}
+
+// TestEncryptedEmptyPassphraseRoundtrip covers a key whose secret packets are
+// encrypted but the passphrase is the empty string. Import and decrypt must
+// still succeed with the empty (non-nil) passphrase.
+func TestEncryptedEmptyPassphraseRoundtrip(t *testing.T) {
+	cfg := &packet.Config{DefaultCipher: packet.CipherAES256}
+	e, err := openpgp.NewEntity("Empty Pass", "", "emptypass@example.com", cfg)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	if err := e.EncryptPrivateKeys([]byte(""), cfg); err != nil {
+		t.Fatalf("EncryptPrivateKeys(empty): %v", err)
+	}
+	block := armorSecret(t, e)
+
+	svc := &Service{}
+	if _, err := svc.ImportSecret(block, []byte("")); err != nil {
+		t.Fatalf("ImportSecret with empty passphrase: %v", err)
+	}
+	plaintext := []byte("encrypted-empty-pass-secret\n")
+	ciphertext, err := Encrypt(plaintext, []*openpgp.Entity{e})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	got, err := svc.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("roundtrip mismatch: %q != %q", got, plaintext)
+	}
+}
+
+// TestNoPassphraseUnlockRepeated verifies that a no-passphrase key survives
+// lock/unlock cycles (the path taken on app restart from the sealed vault).
+func TestNoPassphraseUnlockRepeated(t *testing.T) {
+	e := noPassEntity(t)
+	block := armorSecret(t, e)
+	plaintext := []byte("restart-secret\n")
+
+	svc := &Service{}
+	if _, err := svc.ImportSecret(block, []byte("")); err != nil {
+		t.Fatalf("ImportSecret: %v", err)
+	}
+	ciphertext, err := Encrypt(plaintext, []*openpgp.Entity{e})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		svc.Lock()
+		if err := svc.Unlock(block, []byte("")); err != nil {
+			t.Fatalf("Unlock(empty) cycle %d: %v", i, err)
+		}
+		got, err := svc.Decrypt(ciphertext)
+		if err != nil {
+			t.Fatalf("Decrypt cycle %d: %v", i, err)
+		}
+		if !bytes.Equal(got, plaintext) {
+			t.Fatalf("cycle %d mismatch", i)
+		}
 	}
 }
