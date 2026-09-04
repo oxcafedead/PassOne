@@ -1506,6 +1506,46 @@ func TestSyncNoSSHKey(t *testing.T) {
 	}
 }
 
+func TestSyncLocalOnlyNoRemote(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := goGit.PlainInit(storeDir, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitx.Add(storeDir, ".gpg-id"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.Commit(storeDir, "init", "T", "t@x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	// Sync on a local-only store should succeed without an SSH key.
+	summary, err := a.Sync()
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if !strings.Contains(summary, "No remote configured") {
+		t.Fatalf("expected 'No remote configured' in summary, got %q", summary)
+	}
+}
+
 func TestStatusComprehensive(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)

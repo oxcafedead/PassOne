@@ -397,7 +397,7 @@ func cmdStatus(e *env, _ []string) error {
 }
 
 func cmdSync(e *env, _ []string) error {
-	if err := ensureSSHUnlocked(e); err != nil {
+	if err := ensureUnlocked(e); err != nil {
 		return err
 	}
 	msg, err := e.app.Sync()

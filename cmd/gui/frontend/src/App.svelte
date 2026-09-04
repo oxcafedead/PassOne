@@ -147,12 +147,12 @@ let lockPass: string = ''
 
   $: filtered = entries.filter((e) => e.toLowerCase().includes(query.toLowerCase()))
 
-  // Setup wizard: step 1 needs an SSH key and a store, the PGP key is only
-  // needed to decrypt passwords and can be imported later.
+  // Setup wizard: step 0 needs either an open store (local) or both an SSH key
+  // and a store (for cloning). Step 1 requires a PGP key to decrypt passwords.
   $: canNext = step === 0
-    ? sw.hasSsh && sw.storePath !== '' && !cloneBusy && !openBusy && !importBusy
+    ? (sw.storePath !== '' || sw.hasSsh) && !cloneBusy && !openBusy && !importBusy
     : step === 1
-      ? !importBusy
+      ? sw.hasPgp && !importBusy
       : true
 
   // Tree model derived from the flat entry paths.
@@ -484,13 +484,13 @@ let lockPass: string = ''
 
   // Landing point when something is unfinished: jump straight into the wizard
   // at the step that still needs work instead of a dead unlock screen.
-  //  - missing SSH key or no store → step 1 (repository)
+  //  - missing store → step 1 (repository) — SSH is optional for local stores
   //  - otherwise a missing PGP key → step 2 (decrypt)
   //  - everything in place → no wizard.
   async function openSettingsIfFirstRun(): Promise<void> {
     await loadSettings()
     let start: number | null = null
-    if (!sw.hasSsh || !sw.storePath) {
+    if (!sw.storePath) {
       start = 0
     } else if (!sw.hasPgp) {
       start = 1
@@ -965,16 +965,18 @@ let lockPass: string = ''
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
           </svg>
         </button>
-        <button
-          on:click={syncAndRefresh}
-          disabled={gitBusy}
-          title="Sync with remote (pull + push)"
-          class="btn-ghost rounded-lg px-2.5 py-2"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
-          </svg>
-        </button>
+        {#if sw.gitRemote}
+          <button
+            on:click={syncAndRefresh}
+            disabled={gitBusy}
+            title="Sync with remote (pull + push)"
+            class="btn-ghost rounded-lg px-2.5 py-2"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
+            </svg>
+          </button>
+        {/if}
         <button
           on:click={refresh}
           title="Refresh list"
@@ -1298,8 +1300,8 @@ let lockPass: string = ''
         {#if step === 0}
           <section class="flex flex-col gap-2">
             <p class="text-faint text-xs leading-relaxed">
-              PassOne syncs your passwords from a git store over SSH. Add your SSH key, then
-              open an existing store folder or clone one.
+              Open an existing store folder or clone one over SSH. An SSH key is
+              only required when cloning from a remote; local stores work without one.
             </p>
 
             <label class="text-faint flex flex-col gap-1 text-xs">
@@ -1705,9 +1707,11 @@ let lockPass: string = ''
             <button on:click={runStatus} disabled={gitBusy} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">
               Status
             </button>
-            <button on:click={runSync} disabled={gitBusy} class="btn-accent rounded-lg px-3 py-1.5 text-sm">
-              {gitBusy ? 'Working…' : 'Sync (pull + push)'}
-            </button>
+            {#if sw.gitRemote}
+              <button on:click={runSync} disabled={gitBusy} class="btn-accent rounded-lg px-3 py-1.5 text-sm">
+                {gitBusy ? 'Working…' : 'Sync (pull + push)'}
+              </button>
+            {/if}
           </div>
           {#if gitText}
             <pre class="panel ring-panel text-sub max-h-40 overflow-auto whitespace-pre-wrap rounded-lg p-2 font-mono text-[11px] leading-relaxed">{gitText}</pre>

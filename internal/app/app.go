@@ -998,6 +998,8 @@ func (a *App) sshKeyOrNil() *sshx.SSHKey {
 // Sync fetches, merges and pushes: fetch → pull/merge → push. Diverged
 // histories are reported as a conflict and never silently overwritten.
 // On success it returns a human-readable summary of what happened.
+// For local-only stores with no remote configured, Sync is a no-op that
+// returns early without requiring an SSH key.
 func (a *App) Sync() (string, error) {
 	if err := a.requireUnlocked(); err != nil {
 		return "", err
@@ -1009,14 +1011,24 @@ func (a *App) Sync() (string, error) {
 	if st == nil {
 		return "", errors.New("no password store open")
 	}
-	if a.sshKeyOrNil() == nil {
-		return "", errors.New("SSH key is not loaded; import an SSH private key or unlock first")
-	}
 	if !isGitRepo(st.Root()) {
 		return "", errors.New("the store is not a git repository")
 	}
-	auth := a.sshAuth()
 	root := st.Root()
+
+	// Check whether a remote is configured before requiring an SSH key.
+	state, err := gitx.GetRepoState(root)
+	if err != nil {
+		return "", err
+	}
+	if !state.HasRemote {
+		return "No remote configured; local store only.", nil
+	}
+
+	if a.sshKeyOrNil() == nil {
+		return "", errors.New("SSH key is not loaded; import an SSH private key or unlock first")
+	}
+	auth := a.sshAuth()
 
 	fetched := false
 	fetchErr := gitx.Fetch(root, auth)
