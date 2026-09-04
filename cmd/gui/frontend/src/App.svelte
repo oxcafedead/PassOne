@@ -999,8 +999,8 @@ let lockPass: string = ''
                   <button
                     on:click={() => select(name)}
                     class={selected === name
-                      ? 'list-item list-item-active flex w-full items-center gap-2 truncate rounded-lg px-3 py-2 text-left text-sm'
-                      : 'list-item flex w-full items-center gap-2 truncate rounded-lg px-3 py-2 text-left text-sm'}
+                      ? 'entry-row entry-row-active flex w-full items-center gap-2 truncate rounded-lg px-3 py-2 text-left text-sm'
+                      : 'entry-row flex w-full items-center gap-2 truncate rounded-lg px-3 py-2 text-left text-sm'}
                     title={name}
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" class="icon-dim h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -1021,21 +1021,21 @@ let lockPass: string = ''
                 <li>
                   <button
                     on:click={() => toggleDir(row.node.path)}
-                    style="padding-left: {8 + row.depth * 14}px; grid-template-columns: 16px 20px 1fr auto;"
-                    class="list-item grid w-full min-w-0 items-center gap-1 overflow-hidden rounded-lg px-2 py-1.5 text-left text-sm"
+                    style="padding-left: {8 + row.depth * 14}px;"
+                    class="entry-row flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm"
                   >
-                    <span class="inline-flex items-center justify-center">
+                    <span class="flex shrink-0 items-center justify-center">
                       <svg xmlns="http://www.w3.org/2000/svg" class="text-dim h-3 w-3 shrink-0 transition-transform duration-150 {expanded.has(row.node.path) ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
                       </svg>
                     </span>
-                    <span class="inline-flex items-center justify-center">
+                    <span class="flex shrink-0 items-center justify-center">
                       <svg xmlns="http://www.w3.org/2000/svg" class="text-faint h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
                       </svg>
                     </span>
-                    <span class="text-sub truncate font-medium">{row.node.name}</span>
-                    <span class="text-dim text-ml text-right text-xs">{row.node.count}</span>
+                    <span class="min-w-0 truncate whitespace-nowrap font-medium">{row.node.name}</span>
+                    <span class="shrink-0 whitespace-nowrap text-ml text-right text-xs">{row.node.count}</span>
                   </button>
                 </li>
               {:else}
@@ -1043,18 +1043,18 @@ let lockPass: string = ''
                   <button
                     on:click={() => select(row.node.path)}
                     title={row.node.path}
-                    style="padding-left: {8 + row.depth * 14}px; grid-template-columns: 16px 20px 1fr;"
+                    style="padding-left: {8 + row.depth * 14}px;"
                     class={selected === row.node.path
-                      ? 'list-item list-item-active grid w-full min-w-0 items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm'
-                      : 'list-item grid w-full min-w-0 items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm'}
+                      ? 'entry-row entry-row-active flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm'
+                      : 'entry-row flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm'}
                   >
-                    <span class="inline-flex items-center justify-center"></span>
-                    <span class="inline-flex items-center justify-center">
+                    <span class="flex shrink-0 items-center justify-center"></span>
+                    <span class="flex shrink-0 items-center justify-center">
                       <svg xmlns="http://www.w3.org/2000/svg" class="icon-dim h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.4a2 2 0 00-.59-1.42L15.4 5.17A2 2 0 0013.98 4.6H7a1 1 0 00-1 1V20a1 1 0 001 1zm8-11h-2a3 3 0 00-3 3h5m-5 4h5"/>
                       </svg>
                     </span>
-                    <span class="truncate font-mono text-xs">{row.node.name}</span>
+                    <span class="min-w-0 truncate font-mono text-xs">{row.node.name}</span>
                   </button>
                 </li>
               {/if}

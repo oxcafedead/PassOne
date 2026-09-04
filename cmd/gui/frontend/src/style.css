@@ -136,7 +136,7 @@ html, body, #app {
 .input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
 .input::placeholder { color: var(--placeholder); }
 
-.list-item { color: var(--sub); transition: background-color 0.12s ease; }
-.list-item:hover { background-color: var(--hover); }
-.list-item-active { color: var(--success); background-color: var(--success-bg); }
-.list-item-active:hover { background-color: var(--success-bg); }
+.entry-row { color: var(--sub); transition: background-color 0.12s ease; }
+.entry-row:hover { background-color: var(--hover); }
+.entry-row-active { color: var(--success); background-color: var(--success-bg); }
+.entry-row-active:hover { background-color: var(--success-bg); }
