@@ -50,6 +50,10 @@ func (a *App) ShowPassword(name string) (string, error) { return a.gui.ShowPassw
 // CopyPassword copies the first line of an entry to the clipboard.
 func (a *App) CopyPassword(name string) error { return a.gui.CopyPassword(name) }
 
+// CopyTOTP generates the current TOTP code for an entry and copies it to the
+// clipboard. The entry must contain an otpauth:// URI in its body.
+func (a *App) CopyTOTP(name string) (string, error) { return a.gui.CopyTOTP(name) }
+
 // ClipboardClearSeconds returns how long copied secrets stay on the clipboard.
 func (a *App) ClipboardClearSeconds() int { return a.gui.ClipboardClearSeconds() }
 

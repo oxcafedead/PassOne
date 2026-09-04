@@ -23,6 +23,7 @@ Store / keys
 Passwords
   list [prefix]                List password paths (no decryption)
   show <path> [--full]         Show the password (first line unless --full)
+  totp <path>                  Copy the current TOTP code to the clipboard
   copy <path>                  Copy the password to the clipboard (auto-clears)
   save <path> <file>           Save encrypted plaintext from a file ('-' = stdin)
   edit <path> [--no-commit]    Edit plaintext, re-encrypt (atomic), then commit

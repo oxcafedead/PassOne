@@ -22,6 +22,10 @@ export function CopyPassword(arg1) {
   return window['go']['main']['App']['CopyPassword'](arg1);
 }
 
+export function CopyTOTP(arg1) {
+  return window['go']['main']['App']['CopyTOTP'](arg1);
+}
+
 export function CreatePassword(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CreatePassword'](arg1, arg2, arg3, arg4);
 }

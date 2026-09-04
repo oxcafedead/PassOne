@@ -7,6 +7,7 @@
     ListPasswords,
     ShowPassword,
     CopyPassword,
+    CopyTOTP,
     ClipboardClearSeconds,
     CreatePassword,
     UpdatePassword,
@@ -73,6 +74,10 @@ let lockPass: string = ''
   let detail: string = ''
   let revealed: boolean = false
   let copying: boolean = false
+  let copyingTOTP: boolean = false
+  let copiedTOTPName: string | null = null
+  let copiedTOTPRemaining: number = 0
+  let copyTOTPTimer: ReturnType<typeof setInterval> | null = null
   let clearSeconds: number = 30
   let copiedName: string | null = null
   let copiedRemaining: number = 0
@@ -344,6 +349,10 @@ let lockPass: string = ''
     revealed = false
   }
 
+  function hasTOTP(body: string): boolean {
+    return body.split('\n').some((l) => l.trim().startsWith('otpauth://'))
+  }
+
   async function copySecret(name: string): Promise<void> {
     error = ''
     copying = true
@@ -355,6 +364,20 @@ let lockPass: string = ''
       flash(String(e), true)
     } finally {
       copying = false
+    }
+  }
+
+  async function copyTOTPCode(name: string): Promise<void> {
+    error = ''
+    copyingTOTP = true
+    try {
+      await CopyTOTP(name)
+      copiedTOTPName = name
+      startTOTPCountdown()
+    } catch (e) {
+      flash(String(e), true)
+    } finally {
+      copyingTOTP = false
     }
   }
 
@@ -377,18 +400,39 @@ let lockPass: string = ''
     }
   }
 
+  function startTOTPCountdown(): void {
+    stopTOTPCountdown()
+    copiedTOTPRemaining = clearSeconds
+    copyTOTPTimer = setInterval(() => {
+      copiedTOTPRemaining -= 1
+      if (copiedTOTPRemaining <= 0) {
+        stopTOTPCountdown()
+        copiedTOTPName = null
+      }
+    }, 1000)
+  }
+
+  function stopTOTPCountdown(): void {
+    if (copyTOTPTimer) {
+      clearInterval(copyTOTPTimer)
+      copyTOTPTimer = null
+    }
+  }
+
   function onLockEvent(): void {
     unlocked = false
     selected = null
     detail = ''
     revealed = false
     copiedName = null
+    copiedTOTPName = null
     error = ''
     armDelete = false
     editing = null
     edError = ''
     status = ''
     stopCountdown()
+    stopTOTPCountdown()
     settingsOpen = false
     lockPass = ''
     pgpPass = ''
@@ -862,6 +906,7 @@ let lockPass: string = ''
       offLock()
       offUnlock()
       stopCountdown()
+      stopTOTPCountdown()
       if (statusTimer) {
         clearTimeout(statusTimer)
       }
@@ -1041,6 +1086,9 @@ let lockPass: string = ''
           {#if copiedName === selected}
             <span class="badge-success rounded-md px-2 py-1 text-xs">Copied · clears in {copiedRemaining}s</span>
           {/if}
+          {#if copiedTOTPName === selected}
+            <span class="badge-success rounded-md px-2 py-1 text-xs">TOTP · clears in {copiedTOTPRemaining}s</span>
+          {/if}
           <button
             data-testid="reveal"
             on:click={revealed ? hide : reveal}
@@ -1060,6 +1108,19 @@ let lockPass: string = ''
             </svg>
             {copying ? 'Copying…' : 'Copy'}
           </button>
+          {#if revealed && hasTOTP(detail)}
+            <button
+              on:click={() => copyTOTPCode(selected)}
+              disabled={copyingTOTP}
+              title="Copy the current TOTP code"
+              class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              {copyingTOTP ? 'Generating…' : 'TOTP'}
+            </button>
+          {/if}
           <button
             on:click={openEdit}
             title="Edit this entry"

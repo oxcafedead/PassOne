@@ -1987,3 +1987,81 @@ func TestCloneHostportBadURL(t *testing.T) {
 		t.Fatal("expected CloneHostport to fail for empty URL")
 	}
 }
+
+func TestShowTOTP(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatalf("ReadArmoredKeyRing: %v", err)
+	}
+	fp := entityFingerprint(el[0])
+
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
+	// Entry with an otpauth:// URI in the body.
+	otpBody := "mypass\nhttps://example.com\notpauth://totp/Example:alice@google.com?secret=JBSWY3DPEHPK3PXP&issuer=Example"
+	if err := a.SavePassword("totp/test", []byte(otpBody)); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	code, err := a.ShowTOTP("totp/test")
+	if err != nil {
+		t.Fatalf("ShowTOTP: %v", err)
+	}
+	if len(code) != 6 {
+		t.Fatalf("expected 6-digit TOTP code, got %q", code)
+	}
+
+	// Entry without an otpauth:// URI should fail.
+	if err := a.SavePassword("no-totp/test", []byte("mypass\nnotes\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	if _, err := a.ShowTOTP("no-totp/test"); err == nil {
+		t.Fatal("expected ShowTOTP to fail for an entry without otpauth URI")
+	}
+
+	// Locked app should fail.
+	a.Lock()
+	if _, err := a.ShowTOTP("totp/test"); err == nil {
+		t.Fatal("expected ShowTOTP to fail when locked")
+	}
+}
+
+func TestShowTOTPNotFound(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatalf("ReadArmoredKeyRing: %v", err)
+	}
+	fp := entityFingerprint(el[0])
+
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if _, err := a.ShowTOTP("nonexistent/path"); err == nil {
+		t.Fatal("expected ShowTOTP to fail for a non-existent password")
+	}
+}

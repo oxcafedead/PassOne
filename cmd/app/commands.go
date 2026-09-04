@@ -51,6 +51,7 @@ func commands() map[string]func(*env, []string) error {
 
 		"list": cmdList,
 		"show": cmdShow,
+		"totp": cmdTOTP,
 		"copy": cmdCopy,
 		"save": cmdSave,
 		"edit": cmdEdit,
@@ -272,6 +273,27 @@ func cmdCopy(e *env, args []string) error {
 		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
 	}
 	e.printf("Password copied to clipboard for %d seconds.\n", clearSeconds)
+	return nil
+}
+
+func cmdTOTP(e *env, args []string) error {
+	pos := positional(args)
+	if len(pos) < 1 {
+		return fmt.Errorf("totp requires a password path")
+	}
+	if err := ensurePGPUnlocked(e); err != nil {
+		return err
+	}
+	code, err := e.app.ShowTOTP(pos[0])
+	if err != nil {
+		return err
+	}
+	cfg := e.app.Config()
+	clearSeconds := cfg.ClipboardClearSeconds
+	if err := cliputil.Copied(code, clearSeconds); err != nil {
+		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
+	}
+	e.printf("TOTP copied to clipboard for %d seconds.\n", clearSeconds)
 	return nil
 }
 

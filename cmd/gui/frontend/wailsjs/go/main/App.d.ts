@@ -12,6 +12,8 @@ export function CloneStore(arg1:string,arg2:string):Promise<void>;
 
 export function CopyPassword(arg1:string):Promise<void>;
 
+export function CopyTOTP(arg1:string):Promise<string>;
+
 export function CreatePassword(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function CurrentSettings():Promise<ui.SettingsInfo>;

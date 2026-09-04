@@ -20,6 +20,7 @@ import (
 	"github.com/oxcafedead/passone/internal/security"
 	"github.com/oxcafedead/passone/internal/sshx"
 	"github.com/oxcafedead/passone/internal/store"
+	"github.com/oxcafedead/passone/internal/totp"
 )
 
 // App coordinates the store, OpenPGP, SSH, Git and security subsystems.
@@ -659,6 +660,21 @@ func (a *App) ShowPassword(name string) ([]byte, error) {
 		return nil, err
 	}
 	return plaintext, nil
+}
+
+// ShowTOTP decrypts the named entry, extracts the otpauth:// URI and generates
+// the current time-based one-time password.
+func (a *App) ShowTOTP(name string) (string, error) {
+	plaintext, err := a.ShowPassword(name)
+	if err != nil {
+		return "", err
+	}
+	defer security.Zero(plaintext)
+	uri, err := totp.ExtractURI(plaintext)
+	if err != nil {
+		return "", err
+	}
+	return totp.GenerateCode(uri)
 }
 
 // SavePassword encrypts new plaintext and atomically replaces the password

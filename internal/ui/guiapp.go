@@ -134,6 +134,20 @@ func (g *GUI) CopyPassword(name string) error {
 	return nil
 }
 
+// CopyTOTP generates the current TOTP code for the named entry and copies it
+// to the Windows clipboard. The entry must contain an otpauth:// URI in its
+// body (pass-otp convention).
+func (g *GUI) CopyTOTP(name string) (string, error) {
+	code, err := g.core.ShowTOTP(name)
+	if err != nil {
+		return "", err
+	}
+	if err := cliputil.Copied(code, g.core.Config().ClipboardClearSeconds); err != nil {
+		return "", fmt.Errorf("unable to write to the Windows clipboard: %w", err)
+	}
+	return code, nil
+}
+
 // CreatePassword adds a new entry from a form. The name becomes the first
 // plaintext structure (first line password, optional body below). The secret
 // never leaves the Go process beyond the encrypted .gpg file.
