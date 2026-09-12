@@ -9,9 +9,9 @@ require (
 	github.com/getlantern/systray v1.2.2
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/wailsapp/wails/v2 v2.15.0
-	golang.org/x/crypto v0.55.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/term v0.45.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/term v0.46.0
 )
 
 require (
@@ -61,7 +61,7 @@ require (
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
