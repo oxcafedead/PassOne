@@ -26,6 +26,10 @@ export function CopyTOTP(arg1) {
   return window['go']['main']['App']['CopyTOTP'](arg1);
 }
 
+export function CopyUsername(arg1) {
+  return window['go']['main']['App']['CopyUsername'](arg1);
+}
+
 export function CreatePassword(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CreatePassword'](arg1, arg2, arg3, arg4);
 }
@@ -44,6 +48,10 @@ export function ImportSSHKeyFile(arg1, arg2, arg3) {
 
 export function HasSSHKeyLoaded() {
   return window['go']['main']['App']['HasSSHKeyLoaded']();
+}
+
+export function HasTOTP(arg1) {
+  return window['go']['main']['App']['HasTOTP'](arg1);
 }
 
 export function IsUnlocked() {
@@ -98,6 +106,10 @@ export function SetGitAuthor(arg1, arg2) {
   return window['go']['main']['App']['SetGitAuthor'](arg1, arg2);
 }
 
+export function SetUsernameSource(arg1) {
+  return window['go']['main']['App']['SetUsernameSource'](arg1);
+}
+
 export function ShowPassword(arg1) {
   return window['go']['main']['App']['ShowPassword'](arg1);
 }
@@ -124,4 +136,12 @@ export function Unlock(arg1) {
 
 export function UpdatePassword(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['UpdatePassword'](arg1, arg2, arg3, arg4);
+}
+
+export function Username(arg1) {
+  return window['go']['main']['App']['Username'](arg1);
+}
+
+export function UsernameSource() {
+  return window['go']['main']['App']['UsernameSource']();
 }

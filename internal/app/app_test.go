@@ -2105,3 +2105,129 @@ func TestShowTOTPNotFound(t *testing.T) {
 		t.Fatal("expected ShowTOTP to fail for a non-existent password")
 	}
 }
+
+// unlockWithStore boots an app with an imported PGP key and an unlocked store.
+func unlockWithStore(t *testing.T) *App {
+	t.Helper()
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatalf("ReadArmoredKeyRing: %v", err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	return a
+}
+
+func TestUsername(t *testing.T) {
+	a := unlockWithStore(t)
+	if a.UsernameSource() != "auto" {
+		t.Fatalf("UsernameSource = %q", a.UsernameSource())
+	}
+
+	if err := a.SavePassword("site", []byte("secret\nusername: alice\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	if err := a.SavePassword("email@example.com", []byte("secret\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	if err := a.SavePassword("example.com/alice", []byte("secret\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	if err := a.SavePassword("example.com", []byte("secret\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+
+	// Auto mode: body field when present, file name otherwise.
+	if u, err := a.Username("site"); err != nil || u != "alice" {
+		t.Fatalf("Username(site) = %q, %v", u, err)
+	}
+	if u, err := a.Username("email@example.com"); err != nil || u != "email" {
+		t.Fatalf("Username(email@example.com) = %q, %v", u, err)
+	}
+	if u, err := a.Username("example.com/alice"); err != nil || u != "alice" {
+		t.Fatalf("Username(example.com/alice) = %q, %v", u, err)
+	}
+	if u, err := a.Username("example.com"); err != nil || u != "" {
+		t.Fatalf("Username(example.com) = %q, %v", u, err)
+	}
+
+	if err := a.SetUsernameSource("body"); err != nil {
+		t.Fatalf("SetUsernameSource(body): %v", err)
+	}
+	if u, err := a.Username("site"); err != nil || u != "alice" {
+		t.Fatalf("body mode Username(site) = %q, %v", u, err)
+	}
+	if u, err := a.Username("email@example.com"); err != nil || u != "" {
+		t.Fatalf("body mode Username(email@example.com) = %q, %v", u, err)
+	}
+
+	if err := a.SetUsernameSource("filename"); err != nil {
+		t.Fatalf("SetUsernameSource(filename): %v", err)
+	}
+	if u, err := a.Username("email@example.com"); err != nil || u != "email" {
+		t.Fatalf("filename mode Username(email@example.com) = %q, %v", u, err)
+	}
+	if u, err := a.Username("site"); err != nil || u != "site" {
+		t.Fatalf("filename mode Username(site) = %q, %v", u, err)
+	}
+	if u, err := a.Username("example.com"); err != nil || u != "" {
+		t.Fatalf("filename mode Username(example.com) = %q, %v", u, err)
+	}
+
+	if err := a.SetUsernameSource("bogus"); err == nil {
+		t.Fatal("expected SetUsernameSource to reject an unknown mode")
+	}
+
+	if _, err := a.Username("nonexistent/path"); err == nil {
+		t.Fatal("expected Username to fail for a non-existent password")
+	}
+
+	a.Lock()
+	if _, err := a.Username("site"); err == nil {
+		t.Fatal("expected Username to fail when locked")
+	}
+}
+
+func TestHasTOTP(t *testing.T) {
+	a := unlockWithStore(t)
+
+	otpBody := "mypass\nhttps://example.com\notpauth://totp/Example:alice@google.com?secret=JBSWY3DPEHPK3PXP&issuer=Example"
+	if err := a.SavePassword("totp/test", []byte(otpBody)); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	ok, err := a.HasTOTP("totp/test")
+	if err != nil || !ok {
+		t.Fatalf("HasTOTP(totp/test) = %v, %v", ok, err)
+	}
+
+	if err := a.SavePassword("no-totp/test", []byte("mypass\nnotes\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	ok, err = a.HasTOTP("no-totp/test")
+	if err != nil || ok {
+		t.Fatalf("HasTOTP(no-totp/test) = %v, %v", ok, err)
+	}
+
+	if _, err := a.HasTOTP("nonexistent/path"); err == nil {
+		t.Fatal("expected HasTOTP to fail for a non-existent password")
+	}
+
+	a.Lock()
+	if _, err := a.HasTOTP("totp/test"); err == nil {
+		t.Fatal("expected HasTOTP to fail when locked")
+	}
+}

@@ -97,7 +97,28 @@ func TestAppPassThroughMethods(t *testing.T) {
 	if err := a.CopyPassword("x"); err == nil {
 		t.Fatal("expected CopyPassword without store to fail")
 	}
+	if err := a.CopyUsername("x"); err == nil {
+		t.Fatal("expected CopyUsername without store to fail")
+	}
+	if _, err := a.Username("x"); err == nil {
+		t.Fatal("expected Username without store to fail")
+	}
+	if _, err := a.HasTOTP("x"); err == nil {
+		t.Fatal("expected HasTOTP without store to fail")
+	}
 	_ = a.ClipboardClearSeconds()
+	if a.UsernameSource() != "auto" {
+		t.Fatalf("UsernameSource = %q", a.UsernameSource())
+	}
+	if err := a.SetUsernameSource("body"); err != nil {
+		t.Fatalf("SetUsernameSource: %v", err)
+	}
+	if a.UsernameSource() != "body" {
+		t.Fatalf("UsernameSource = %q after set", a.UsernameSource())
+	}
+	if err := a.SetUsernameSource("bogus"); err == nil {
+		t.Fatal("expected SetUsernameSource to reject an unknown mode")
+	}
 	if _, err := a.CreatePassword("x", "p", "p", ""); err == nil {
 		t.Fatal("expected CreatePassword without store to fail")
 	}

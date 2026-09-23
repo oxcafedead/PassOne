@@ -14,6 +14,8 @@ export function CopyPassword(arg1:string):Promise<void>;
 
 export function CopyTOTP(arg1:string):Promise<string>;
 
+export function CopyUsername(arg1:string):Promise<void>;
+
 export function CreatePassword(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function CurrentSettings():Promise<ui.SettingsInfo>;
@@ -23,6 +25,8 @@ export function ImportPGPKeyFile(arg1:string,arg2:string,arg3:string):Promise<st
 export function ImportSSHKeyFile(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function HasSSHKeyLoaded():Promise<boolean>;
+
+export function HasTOTP(arg1:string):Promise<boolean>;
 
 export function IsUnlocked():Promise<boolean>;
 
@@ -50,6 +54,8 @@ export function SetClipboardClear(arg1:number):Promise<void>;
 
 export function SetGitAuthor(arg1:string,arg2:string):Promise<void>;
 
+export function SetUsernameSource(arg1:string):Promise<void>;
+
 export function ShowPassword(arg1:string):Promise<string>;
 
 export function Status():Promise<string>;
@@ -63,3 +69,7 @@ export function TrustHost(arg1:string):Promise<void>;
 export function Unlock(arg1:string):Promise<void>;
 
 export function UpdatePassword(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<string>;
+
+export function Username(arg1:string):Promise<string>;
+
+export function UsernameSource():Promise<string>;

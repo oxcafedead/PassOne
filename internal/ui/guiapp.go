@@ -148,6 +148,46 @@ func (g *GUI) CopyTOTP(name string) (string, error) {
 	return code, nil
 }
 
+// HasTOTP decrypts the named entry and reports whether it contains an
+// otpauth:// URI. It is used to surface the TOTP action before the entry's
+// content is shown; no plaintext reaches the frontend.
+func (g *GUI) HasTOTP(name string) (bool, error) {
+	return g.core.HasTOTP(name)
+}
+
+// UsernameSource returns the configured login extraction mode
+// (auto, body or filename).
+func (g *GUI) UsernameSource() string { return g.core.UsernameSource() }
+
+// SetUsernameSource persists the login extraction mode (auto, body, filename).
+func (g *GUI) SetUsernameSource(mode string) error {
+	return g.core.SetUsernameSource(strings.TrimSpace(mode))
+}
+
+// Username decrypts the named entry and returns its login per the configured
+// username source. An entry without a recognizable login yields the empty
+// string; the plaintext is never returned.
+func (g *GUI) Username(name string) (string, error) {
+	return g.core.Username(name)
+}
+
+// CopyUsername extracts the entry's login and writes it to the Windows
+// clipboard with the configured auto-clear, mirroring CopyPassword. An entry
+// without a recognizable login is reported as an error.
+func (g *GUI) CopyUsername(name string) error {
+	user, err := g.core.Username(name)
+	if err != nil {
+		return err
+	}
+	if user == "" {
+		return fmt.Errorf("no username found for %s (check the entry body or its file name)", name)
+	}
+	if err := cliputil.Copied(user, g.core.Config().ClipboardClearSeconds); err != nil {
+		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
+	}
+	return nil
+}
+
 // CreatePassword adds a new entry from a form. The name becomes the first
 // plaintext structure (first line password, optional body below). The secret
 // never leaves the Go process beyond the encrypted .gpg file.
@@ -374,6 +414,7 @@ type SettingsInfo struct {
 	ClipboardClearSeconds int    `json:"clipboardClearSeconds"`
 	GitAuthorName         string `json:"gitAuthorName"`
 	GitAuthorEmail        string `json:"gitAuthorEmail"`
+	UsernameSource        string `json:"usernameSource"`
 	HasPGP                bool   `json:"hasPgp"`
 	HasSSH                bool   `json:"hasSsh"`
 }
@@ -391,6 +432,7 @@ func (g *GUI) CurrentSettings() SettingsInfo {
 		ClipboardClearSeconds: cfg.ClipboardClearSeconds,
 		GitAuthorName:         cfg.GitAuthorName,
 		GitAuthorEmail:        cfg.GitAuthorEmail,
+		UsernameSource:        cfg.UsernameSource,
 		HasPGP:                g.core.HasStoredPGPKey(),
 		HasSSH:                g.core.HasStoredSSHKey(),
 	}

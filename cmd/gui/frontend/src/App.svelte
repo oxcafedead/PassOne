@@ -7,7 +7,10 @@
     ListPasswords,
     ShowPassword,
     CopyPassword,
+    CopyUsername,
     CopyTOTP,
+    HasTOTP,
+    Username,
     ClipboardClearSeconds,
     CreatePassword,
     UpdatePassword,
@@ -28,6 +31,8 @@
     SetAutoLock,
     SetClipboardClear,
     SetGitAuthor,
+    SetUsernameSource,
+    UsernameSource,
     Status,
     Sync,
     KnownHosts,
@@ -44,6 +49,7 @@
     clipboardClearSeconds: number
     gitAuthorName: string
     gitAuthorEmail: string
+    usernameSource: string
     hasPgp: boolean
     hasSsh: boolean
   }
@@ -73,8 +79,15 @@ let lockPass: string = ''
   let selected: string | null = null
   let detail: string = ''
   let revealed: boolean = false
+  let totpAvailable: boolean = false
+  let username: string = ''
+  let hasUsername: boolean = false
   let copying: boolean = false
+  let copyingUsername: boolean = false
   let copyingTOTP: boolean = false
+  let copiedUsernameName: string | null = null
+  let copiedUsernameRemaining: number = 0
+  let copyUsernameTimer: ReturnType<typeof setInterval> | null = null
   let copiedTOTPName: string | null = null
   let copiedTOTPRemaining: number = 0
   let copyTOTPTimer: ReturnType<typeof setInterval> | null = null
@@ -108,6 +121,7 @@ let lockPass: string = ''
     clipboardClearSeconds: 30,
     gitAuthorName: '',
     gitAuthorEmail: '',
+    usernameSource: 'auto',
     hasPgp: false,
     hasSsh: false,
   }
@@ -304,6 +318,7 @@ let lockPass: string = ''
       detail = ''
       revealed = false
       await refresh()
+      await probeSelected()
     } catch (e) {
       flash(String(e), true)
     } finally {
@@ -311,8 +326,11 @@ let lockPass: string = ''
     }
   }
 
-  // select marks an entry as chosen without decrypting it. The content stays
-  // hidden until reveal() is invoked explicitly.
+  // select marks an entry as chosen without decrypting it for display. The
+  // content stays hidden until reveal() is invoked explicitly. Selecting still
+  // decrypts once in the backend to discover whether the entry carries a TOTP
+  // seed or a login, so the matching actions can be shown; the plaintext never
+  // reaches the DOM.
   async function select(name: string): Promise<void> {
     error = ''
     armDelete = false
@@ -320,11 +338,38 @@ let lockPass: string = ''
       selected = null
       detail = ''
       revealed = false
+      totpAvailable = false
+      username = ''
+      hasUsername = false
       return
     }
     selected = name
     detail = ''
     revealed = false
+    await probeSelected()
+  }
+
+  // probeSelected re-derives the TOTP presence and login of the selected entry
+  // by decrypting it in the backend only; nothing is shown to the user.
+  async function probeSelected(): Promise<void> {
+    if (!selected) {
+      totpAvailable = false
+      username = ''
+      hasUsername = false
+      return
+    }
+    try {
+      totpAvailable = (await HasTOTP(selected)) ?? false
+    } catch (_) {
+      totpAvailable = false
+    }
+    try {
+      username = (await Username(selected)) ?? ''
+      hasUsername = username !== ''
+    } catch (_) {
+      username = ''
+      hasUsername = false
+    }
   }
 
   // reveal decrypts only the selected entry and renders it. This is the single
@@ -353,6 +398,11 @@ let lockPass: string = ''
     return body.split('\n').some((l) => l.trim().startsWith('otpauth://'))
   }
 
+  // The TOTP action is available as soon as the backend confirms a seed exists,
+  // even before the entry's content is revealed. Once revealed, the printed
+  // body is authoritative as a fallback.
+  $: totpVisible = totpAvailable || (revealed && hasTOTP(detail))
+
   async function copySecret(name: string): Promise<void> {
     error = ''
     copying = true
@@ -364,6 +414,20 @@ let lockPass: string = ''
       flash(String(e), true)
     } finally {
       copying = false
+    }
+  }
+
+  async function copyUsername(name: string): Promise<void> {
+    error = ''
+    copyingUsername = true
+    try {
+      await CopyUsername(name)
+      copiedUsernameName = name
+      startUsernameCountdown()
+    } catch (e) {
+      flash(String(e), true)
+    } finally {
+      copyingUsername = false
     }
   }
 
@@ -419,12 +483,35 @@ let lockPass: string = ''
     }
   }
 
+  function startUsernameCountdown(): void {
+    stopUsernameCountdown()
+    copiedUsernameRemaining = clearSeconds
+    copyUsernameTimer = setInterval(() => {
+      copiedUsernameRemaining -= 1
+      if (copiedUsernameRemaining <= 0) {
+        stopUsernameCountdown()
+        copiedUsernameName = null
+      }
+    }, 1000)
+  }
+
+  function stopUsernameCountdown(): void {
+    if (copyUsernameTimer) {
+      clearInterval(copyUsernameTimer)
+      copyUsernameTimer = null
+    }
+  }
+
   function onLockEvent(): void {
     unlocked = false
     selected = null
     detail = ''
     revealed = false
+    totpAvailable = false
+    username = ''
+    hasUsername = false
     copiedName = null
+    copiedUsernameName = null
     copiedTOTPName = null
     error = ''
     armDelete = false
@@ -433,6 +520,7 @@ let lockPass: string = ''
     status = ''
     stopCountdown()
     stopTOTPCountdown()
+    stopUsernameCountdown()
     settingsOpen = false
     lockPass = ''
     pgpPass = ''
@@ -696,6 +784,7 @@ let lockPass: string = ''
       await SetAutoLock(sw.autoLockMinutes)
       await SetClipboardClear(sw.clipboardClearSeconds)
       await SetGitAuthor(sw.gitAuthorName, sw.gitAuthorEmail)
+      await SetUsernameSource(sw.usernameSource)
       flash('Settings saved')
       await loadSettings()
       try {
@@ -1085,6 +1174,9 @@ let lockPass: string = ''
         <header class="flex items-center gap-3">
           <h2 class="text-main min-w-0 truncate font-mono text-sm font-medium">{selected}</h2>
           <span class="flex-1"></span>
+          {#if copiedUsernameName === selected}
+            <span class="badge-success rounded-md px-2 py-1 text-xs">Username · clears in {copiedUsernameRemaining}s</span>
+          {/if}
           {#if copiedName === selected}
             <span class="badge-success rounded-md px-2 py-1 text-xs">Copied · clears in {copiedRemaining}s</span>
           {/if}
@@ -1110,7 +1202,7 @@ let lockPass: string = ''
             </svg>
             {copying ? 'Copying…' : 'Copy'}
           </button>
-          {#if revealed && hasTOTP(detail)}
+          {#if totpVisible}
             <button
               on:click={() => copyTOTPCode(selected)}
               disabled={copyingTOTP}
@@ -1123,8 +1215,20 @@ let lockPass: string = ''
               {copyingTOTP ? 'Generating…' : 'TOTP'}
             </button>
           {/if}
+          {#if hasUsername}
+            <button
+              on:click={() => copyUsername(selected)}
+              disabled={copyingUsername}
+              title={'Copy the login: ' + (username || 'no login')}
+              class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+              </svg>
+              {copyingUsername ? 'Copying…' : 'Username'}
+            </button>
+          {/if}
           <button
-            on:click={openEdit}
             title="Edit this entry"
             class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
           >
@@ -1482,6 +1586,14 @@ let lockPass: string = ''
                 <input type="email" bind:value={sw.gitAuthorEmail} class="input rounded-lg px-3 py-2 text-sm"/>
               </label>
             </div>
+            <label class="text-faint flex flex-col gap-1 text-xs">
+              Where the login (username) comes from
+              <select bind:value={sw.usernameSource} class="input rounded-lg px-3 py-2 text-sm">
+                <option value="auto">Body field, fall back to file name</option>
+                <option value="body">Body field only</option>
+                <option value="filename">File name only</option>
+              </select>
+            </label>
           </section>
         {/if}
 
@@ -1648,6 +1760,14 @@ let lockPass: string = ''
             <input type="number" min="1" bind:value={sw.clipboardClearSeconds} class="input rounded-lg px-3 py-2 text-sm"/>
           </label>
         </div>
+        <label class="text-faint flex flex-col gap-1 text-xs">
+          Username source
+          <select bind:value={sw.usernameSource} class="input rounded-lg px-3 py-2 text-sm">
+            <option value="auto">Body field, fall back to file name</option>
+            <option value="body">Body field only</option>
+            <option value="filename">File name only</option>
+          </select>
+        </label>
         <div class="grid grid-cols-2 gap-2">
           <label class="text-faint flex flex-col gap-1 text-xs">
             Git author name

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/oxcafedead/passone/internal/username"
 )
 
 // Config holds the user-visible application configuration.
@@ -18,6 +20,7 @@ type Config struct {
 	ClipboardClearSeconds int    `json:"clipboardClearSeconds"`
 	GitAuthorName         string `json:"gitAuthorName"`
 	GitAuthorEmail        string `json:"gitAuthorEmail"`
+	UsernameSource        string `json:"usernameSource"`
 }
 
 // Paths describes the layout of the per-user application data directory.
@@ -38,6 +41,7 @@ func defaultConfig() *Config {
 		AutoLockMinutes:       5,
 		ClipboardClearSeconds: 30,
 		GitAuthorName:         "PassOne",
+		UsernameSource:        username.DefaultMode,
 	}
 }
 
@@ -120,6 +124,7 @@ func (m *Manager) Load() (*Config, error) {
 	if cfg.ClipboardClearSeconds <= 0 {
 		cfg.ClipboardClearSeconds = 30
 	}
+	cfg.UsernameSource = username.Normalize(cfg.UsernameSource)
 	return cfg, nil
 }
 

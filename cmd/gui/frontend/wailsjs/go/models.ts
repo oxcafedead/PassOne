@@ -40,6 +40,7 @@ export namespace ui {
 	    clipboardClearSeconds: number;
 	    gitAuthorName: string;
 	    gitAuthorEmail: string;
+	    usernameSource: string;
 	    hasPgp: boolean;
 	    hasSsh: boolean;
 	
@@ -58,6 +59,7 @@ export namespace ui {
 	        this.clipboardClearSeconds = source["clipboardClearSeconds"];
 	        this.gitAuthorName = source["gitAuthorName"];
 	        this.gitAuthorEmail = source["gitAuthorEmail"];
+	        this.usernameSource = source["usernameSource"];
 	        this.hasPgp = source["hasPgp"];
 	        this.hasSsh = source["hasSsh"];
 	    }

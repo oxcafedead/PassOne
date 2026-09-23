@@ -49,13 +49,15 @@ func commands() map[string]func(*env, []string) error {
 		"test-ssh":       cmdTestSSH,
 		"known-hosts":    cmdKnownHosts,
 
-		"list": cmdList,
-		"show": cmdShow,
-		"totp": cmdTOTP,
-		"copy": cmdCopy,
-		"save": cmdSave,
-		"edit": cmdEdit,
-		"rm":   cmdRemove,
+		"list":          cmdList,
+		"show":          cmdShow,
+		"totp":          cmdTOTP,
+		"copy":          cmdCopy,
+		"username":      cmdUsername,
+		"copy-username": cmdCopyUsername,
+		"save":          cmdSave,
+		"edit":          cmdEdit,
+		"rm":            cmdRemove,
 
 		"status": cmdStatus,
 		"sync":   cmdSync,
@@ -231,6 +233,47 @@ func cmdShow(e *env, args []string) error {
 	}
 	defer zero(plaintext)
 	return printPlaintext(e, plaintext, hasFlag(args, "--full") || hasFlag(args, "--all"))
+}
+
+// cmdUsername prints the entry's login to stdout without revealing the secret.
+// The derivation follows the configured username source.
+func cmdUsername(e *env, args []string) error {
+	pos := positional(args)
+	if len(pos) < 1 {
+		return fmt.Errorf("username requires a password path")
+	}
+	if err := ensurePGPUnlocked(e); err != nil {
+		return err
+	}
+	u, err := e.app.Username(pos[0])
+	if err != nil {
+		return err
+	}
+	e.println(u)
+	return nil
+}
+
+// cmdCopyUsername copies the entry's login to the clipboard without revealing
+// the secret.
+func cmdCopyUsername(e *env, args []string) error {
+	pos := positional(args)
+	if len(pos) < 1 {
+		return fmt.Errorf("copy-username requires a password path")
+	}
+	if err := ensurePGPUnlocked(e); err != nil {
+		return err
+	}
+	login, err := e.app.Username(pos[0])
+	if err != nil {
+		return err
+	}
+	cfg := e.app.Config()
+	clearSeconds := cfg.ClipboardClearSeconds
+	if err := cliputil.Copied(login, clearSeconds); err != nil {
+		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
+	}
+	e.printf("Login copied to clipboard for %d seconds.\n", clearSeconds)
+	return nil
 }
 
 func printPlaintext(e *env, plaintext []byte, full bool) error {
@@ -443,6 +486,7 @@ func cmdConfig(e *env, _ []string) error {
 	e.printf("pgpKeyFingerprint     = %q\n", cfg.PGPKeyFingerprint)
 	e.printf("autoLockMinutes       = %d\n", cfg.AutoLockMinutes)
 	e.printf("clipboardClearSeconds = %d\n", cfg.ClipboardClearSeconds)
+	e.printf("usernameSource        = %q\n", cfg.UsernameSource)
 	e.printf("gitAuthorName         = %q\n", cfg.GitAuthorName)
 	e.printf("gitAuthorEmail        = %q\n", cfg.GitAuthorEmail)
 	return nil

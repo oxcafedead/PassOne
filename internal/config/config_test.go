@@ -33,6 +33,9 @@ func TestManagerDefaults(t *testing.T) {
 	if cfg.ClipboardClearSeconds != 30 {
 		t.Fatalf("ClipboardClearSeconds = %d", cfg.ClipboardClearSeconds)
 	}
+	if cfg.UsernameSource != "auto" {
+		t.Fatalf("UsernameSource = %q", cfg.UsernameSource)
+	}
 }
 
 func TestManagerSaveLoadRoundtrip(t *testing.T) {
@@ -47,6 +50,7 @@ func TestManagerSaveLoadRoundtrip(t *testing.T) {
 		ClipboardClearSeconds: 12,
 		GitAuthorName:         "PassOne",
 		GitAuthorEmail:        "me@example.com",
+		UsernameSource:        "body",
 	}
 	if err := m.Save(in); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -62,12 +66,12 @@ func TestManagerSaveLoadRoundtrip(t *testing.T) {
 
 func (c *Config) ReString() string {
 	return strings.Join([]string{c.GitRemote, c.SSHKeyID, c.PGPKeyFingerprint,
-		c.GitAuthorName, c.GitAuthorEmail}, "|")
+		c.GitAuthorName, c.GitAuthorEmail, c.UsernameSource}, "|")
 }
 
 func TestManagerFixesBadDefaults(t *testing.T) {
 	paths := PathsFromBase(t.TempDir())
-	if err := os.WriteFile(paths.ConfigFile, []byte(`{"autoLockMinutes":0,"clipboardClearSeconds":-1}`), 0o600); err != nil {
+	if err := os.WriteFile(paths.ConfigFile, []byte(`{"autoLockMinutes":0,"clipboardClearSeconds":-1,"usernameSource":"bogus"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m := NewManager(paths)
@@ -77,6 +81,9 @@ func TestManagerFixesBadDefaults(t *testing.T) {
 	}
 	if cfg.AutoLockMinutes != 5 || cfg.ClipboardClearSeconds != 30 {
 		t.Fatalf("bad values not repaired: %+v", cfg)
+	}
+	if cfg.UsernameSource != "auto" {
+		t.Fatalf("bad usernameSource not repaired: %+v", cfg)
 	}
 }
 

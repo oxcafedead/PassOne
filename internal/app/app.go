@@ -21,6 +21,7 @@ import (
 	"github.com/oxcafedead/passone/internal/sshx"
 	"github.com/oxcafedead/passone/internal/store"
 	"github.com/oxcafedead/passone/internal/totp"
+	"github.com/oxcafedead/passone/internal/username"
 )
 
 // App coordinates the store, OpenPGP, SSH, Git and security subsystems.
@@ -675,6 +676,61 @@ func (a *App) ShowTOTP(name string) (string, error) {
 		return "", err
 	}
 	return totp.GenerateCode(uri)
+}
+
+// HasTOTP decrypts the named entry and reports whether its body carries an
+// otpauth:// URI. No plaintext is returned to the caller, so the UI can surface
+// the TOTP action for an entry without revealing its content.
+func (a *App) HasTOTP(name string) (bool, error) {
+	plaintext, err := a.ShowPassword(name)
+	if err != nil {
+		return false, err
+	}
+	defer security.Zero(plaintext)
+	_, err = totp.ExtractURI(plaintext)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, totp.ErrNoOTP) {
+		return false, nil
+	}
+	return false, err
+}
+
+// UsernameSource returns the configured login extraction mode
+// (auto, body or filename).
+func (a *App) UsernameSource() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.UsernameSource
+}
+
+// SetUsernameSource persists the login extraction mode
+// (auto, body or filename).
+func (a *App) SetUsernameSource(mode string) error {
+	if !username.Valid(mode) {
+		return fmt.Errorf("unknown username source %q; use auto, body or filename", mode)
+	}
+	a.mu.Lock()
+	a.cfg.UsernameSource = username.Normalize(mode)
+	a.mu.Unlock()
+	return a.saveConfig()
+}
+
+// Username decrypts the named entry and returns its login according to the
+// configured username source. An entry without a recognizable login yields an
+// empty string; the encrypted content never leaves this method.
+func (a *App) Username(name string) (string, error) {
+	plaintext, err := a.ShowPassword(name)
+	if err != nil {
+		return "", err
+	}
+	defer security.Zero(plaintext)
+	mode, err := username.ParseMode(a.UsernameSource())
+	if err != nil {
+		return "", err
+	}
+	return username.Extract(name, plaintext, mode), nil
 }
 
 // SavePassword encrypts new plaintext and atomically replaces the password

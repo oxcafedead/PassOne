@@ -54,6 +54,25 @@ func (a *App) CopyPassword(name string) error { return a.gui.CopyPassword(name) 
 // clipboard. The entry must contain an otpauth:// URI in its body.
 func (a *App) CopyTOTP(name string) (string, error) { return a.gui.CopyTOTP(name) }
 
+// CopyUsername copies an entry's login to the clipboard. The login is derived
+// from the entry body or its file name per the configured username source.
+func (a *App) CopyUsername(name string) error { return a.gui.CopyUsername(name) }
+
+// Username returns the login of an entry per the configured username source,
+// without revealing the rest of its plaintext.
+func (a *App) Username(name string) (string, error) { return a.gui.Username(name) }
+
+// HasTOTP reports whether an entry carries an otpauth:// URI without revealing
+// its plaintext. It lets the UI show the TOTP action before the entry content
+// is displayed.
+func (a *App) HasTOTP(name string) (bool, error) { return a.gui.HasTOTP(name) }
+
+// UsernameSource returns the configured login extraction mode.
+func (a *App) UsernameSource() string { return a.gui.UsernameSource() }
+
+// SetUsernameSource persists the login extraction mode (auto, body, filename).
+func (a *App) SetUsernameSource(mode string) error { return a.gui.SetUsernameSource(mode) }
+
 // ClipboardClearSeconds returns how long copied secrets stay on the clipboard.
 func (a *App) ClipboardClearSeconds() int { return a.gui.ClipboardClearSeconds() }
 
