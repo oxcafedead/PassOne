@@ -5,11 +5,11 @@
 [![CI](https://github.com/oxcafedead/passone/actions/workflows/ci.yml/badge.svg)](https://github.com/oxcafedead/passone/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/oxcafedead/passone)](./go.mod)
 
-PassOne is a native Windows app for working with password-store repositories (the `pass` format: `.gpg` files, `.gpg-id` recipients, and git).
+PassOne is a native **Windows desktop app** for working with password-store repositories (the `pass` format: `.gpg` files, `.gpg-id` recipients, and git). It is primarily used through its GUI.
 Unlike most clients, it does **not** need `gpg.exe`, `git.exe`, or `ssh.exe` installed — all cryptography, git transport, and SSH are implemented in Go and embedded in a single binary.
 
-- **CLI** — `passone.exe` for terminal users and automation.
-- **GUI** — `passone-ui.exe`, a Wails v2 + Svelte 5 desktop app with a system tray and auto-lock.
+- **GUI (recommended)** — `passone-ui.exe`, a Wails v2 + Svelte 5 desktop app with a system tray, auto-lock, and light/dark themes.
+- **CLI** — `passone.exe`, a small command-line interface kept around for scripting and compatibility. It started as a proof of concept and is not the primary way to use PassOne.
 
 > ⚠️ Windows-only. PassOne uses DPAPI, the system tray, Windows theme registry values, and the Win32 clipboard.
 
@@ -17,13 +17,13 @@ Unlike most clients, it does **not** need `gpg.exe`, `git.exe`, or `ssh.exe` ins
 
 ## Features
 
+- 🪟 **Native GUI** — system tray, single window, light/dark theme support, single-instance lock.
 - 🔐 **OpenPGP built-in** — import private PGP keys and encrypt/decrypt `*.gpg` files via [`ProtonMail/go-crypto`](https://github.com/ProtonMail/go-crypto).
 - 🗝️ **SSH built-in** — import OpenSSH private keys (`ed25519`, RSA), verify host keys, manage `known_hosts`, and sync over SSH via [`go-git`](https://github.com/go-git/go-git).
 - 📂 **Pass-compatible** — reads and writes standard pass stores: `.gpg-id`, folders, and `*.gpg` files.
 - 🔄 **Git sync** — `clone`, `status`, and `sync` (fetch/pull/push) without an external git installation.
-- 🔒 **Security-first** — keys are sealed with Windows DPAPI; decrypted key material lives in memory only after `unlock`; idle auto-lock; best-effort memory zeroing.
-- 📋 **Clipboard auto-clear** — `copy` puts the password on the clipboard and clears it after a configurable timeout.
-- 🪟 **Native GUI** — system tray, single window, light/dark theme support, single-instance lock.
+- 🔒 **Security-first** — keys are sealed with Windows DPAPI; decrypted key material lives in memory only during an unlocked session; idle auto-lock; best-effort memory zeroing.
+- 📋 **Clipboard auto-clear** — copied passwords are removed from the clipboard after a configurable timeout.
 
 ---
 
@@ -37,12 +37,6 @@ Requirements:
 - [Go](https://go.dev/) 1.26+
 - [Node.js](https://nodejs.org/) + npm (for the GUI)
 - [Wails CLI](https://wails.io/docs/gettingstarted/installation) (for the GUI)
-
-Build the CLI:
-
-```powershell
-go build -o passone.exe ./cmd/app
-```
 
 Build the GUI:
 
@@ -62,59 +56,53 @@ go run ./tools/checkicon cmd/gui/build/bin/passone-ui.exe
 
 The GUI binary will be at `cmd/gui/build/bin/passone-ui.exe`.
 
+Build the CLI (optional):
+
+```powershell
+go build -o passone.exe ./cmd/app
+```
+
 ---
 
 ## Quick start
 
-### 1. Initialize the app data directory
-
-```powershell
-.\passone.exe init
-```
+1. Run `passone-ui.exe`.
+2. Import your PGP and SSH keys in the settings screen.
+3. Open an existing pass store or clone one over SSH.
+4. Unlock the store; browse, copy, add, and edit passwords from the app.
+5. PassOne lives in the system tray — closing the window hides it; quit from the tray menu.
+6. The session auto-locks after a period of inactivity (configurable).
 
 Data is stored in `%LOCALAPPDATA%\PassOne` by default. You can override this with the `PASSONE_DIR` environment variable.
 
-### 2. Import your keys
+---
 
-```powershell
-.\passone.exe import-pgp-key .\private-key.asc
-.\passone.exe import-ssh-key $env:USERPROFILE\.ssh\id_ed25519
-```
+## Security
 
-### 3. Open or clone a pass store
-
-Open an existing local store:
-
-```powershell
-.\passone.exe open C:\Users\Me\pass-store
-```
-
-Or clone one over SSH:
-
-```powershell
-.\passone.exe test-ssh github.com
-.\passone.exe clone git@github.com:username\pass-store.git
-```
-
-### 4. Unlock and use
-
-```powershell
-.\passone.exe unlock
-
-.\passone.exe list
-.\passone.exe show github/personal
-.\passone.exe copy github/personal
-```
-
-Lock again when done:
-
-```powershell
-.\passone.exe lock
-```
+- **Key storage:** private keys are stored encrypted (AES-256-GCM) in `%LOCALAPPDATA%\PassOne`. The sealing key is protected by Windows DPAPI for the current user.
+- **Memory:** decrypted keys exist in memory only during an unlocked session. They are dropped on lock or idle timeout, with best-effort buffer zeroing.
+- **Host verification:** SSH host keys are captured on first contact and stored; if a host key changes, the connection is refused.
+- **Clipboard:** copied passwords are automatically removed from the clipboard after the configured timeout.
+- **Atomic writes:** password files are written to a temporary file and only moved into place after encryption succeeds.
 
 ---
 
-## CLI reference
+## CLI (optional)
+
+The CLI predates the GUI and is kept mainly for scripting; it exposes the same core functionality.
+
+```powershell
+.\passone.exe init
+.\passone.exe import-pgp-key .\private-key.asc
+.\passone.exe open .\pass-store
+.\passone.exe unlock
+.\passone.exe list
+.\passone.exe show github/personal
+.\passone.exe copy github/personal
+.\passone.exe lock
+```
+
+Full command reference:
 
 ```text
 Usage: passone <command> [arguments]
@@ -147,26 +135,6 @@ Session
   state                        Show lock state and configuration
   config                       Show configuration
 ```
-
----
-
-## GUI usage
-
-1. Run `passone-ui.exe`.
-2. Import your PGP and SSH keys in the settings screen.
-3. Open or clone your pass store.
-4. PassOne lives in the system tray — closing the window hides it; quit from the tray menu.
-5. The session auto-locks after a period of inactivity (configurable).
-
----
-
-## Security
-
-- **Key storage:** private keys are stored encrypted (AES-256-GCM) in `%LOCALAPPDATA%\PassOne`. The sealing key is protected by Windows DPAPI for the current user.
-- **Memory:** decrypted keys exist in memory only after an explicit `unlock`. They are dropped on `lock` or idle timeout, with best-effort buffer zeroing.
-- **Host verification:** SSH host keys are captured on first contact and stored; if a host key changes, the connection is refused.
-- **Clipboard:** copied passwords are automatically removed from the clipboard after the configured timeout.
-- **Atomic writes:** password files are written to a temporary file and only moved into place after encryption succeeds.
 
 ---
 
