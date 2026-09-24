@@ -53,7 +53,11 @@ npm run build
 cd ../../..
 
 cd cmd/gui
-wails build -skipbindings -s -nopackage -clean
+wails build -skipbindings -s -clean
+cd ../..
+# The icon/manifest/version resources are only embedded when packaging runs
+# (never pass -nopackage). Verify the exe really carries the icon:
+go run ./tools/checkicon cmd/gui/build/bin/passone-ui.exe
 ```
 
 The GUI binary will be at `cmd/gui/build/bin/passone-ui.exe`.

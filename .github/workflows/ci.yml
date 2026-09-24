@@ -53,6 +53,22 @@ jobs:
           install-mode: goinstall
           args: --timeout=5m
 
+      # The GUI exe only receives its icon, manifest and version info when Wails
+      # runs its packaging step. Building it in CI (without -nopackage) and then
+      # asserting the icon resource guards against icon-less builds regressing.
+      - name: Install Wails CLI
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+
+      - name: Build GUI binary
+        working-directory: cmd/gui
+        shell: pwsh
+        run: wails build -skipbindings -s -clean
+
+      - name: Verify GUI icon is embedded
+        shell: pwsh
+        run: go run ./tools/checkicon cmd/gui/build/bin/passone-ui.exe
+
       - name: SonarQube Scan
         # Dependabot-triggered runs have a read-only GITHUB_TOKEN and no access to
         # secrets (SONAR_TOKEN), which makes the scan fail. Skip it for Dependabot.

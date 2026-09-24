@@ -49,7 +49,10 @@ go test ./internal/app -run TestImportUnlockDecryptFlow
 
 # GUI binary build
 cd cmd/gui
-wails build -skipbindings -s -nopackage -clean
+wails build -skipbindings -s -clean
+# Verify the exe embeds the app icon (RT_GROUP_ICON resource)
+cd ../..
+go run ./tools/checkicon cmd/gui/build/bin/passone-ui.exe
 ```
 
 Frontend development server (hot reload):
@@ -77,7 +80,7 @@ CI (`.github/workflows/ci.yml`) installs golangci-lint with `install-mode: goins
 ## CI / quality gates
 
 - Runs on `windows-latest` (the app is Windows-specific: systray, clipboard, registry, DPAPI).
-- Steps: checkout with full history → setup Go → setup Node → `npm ci && npm run build` → `go test` with coverage → `golangci-lint` → SonarQube scan.
+- Steps: checkout with full history → setup Go → setup Node → `npm ci && npm run build` → `go test` with coverage → Wails GUI build + `tools/checkicon` icon assertion → `golangci-lint` → SonarQube scan.
 - Requires GitHub secret `SONAR_TOKEN`; project metadata is in `sonar-project.properties`.
 
 Recommended local order before pushing:
@@ -97,6 +100,7 @@ Recommended local order before pushing:
 - `cmd/gui/main.go` embeds `all:frontend/dist`. If the frontend has not been built, `go test ./...` fails with `pattern all:frontend/dist: no matching files found`.
 - `go test -race` requires `CGO_ENABLED=1`; it is not used in CI.
 - NEVER run `go build`/`go run` directly on `cmd/gui` as the app entrypoint: Wails requires its own build tags and aborts with `Error Wails applications will not build without the correct build tags`. Build the GUI with `wails build` from `cmd/gui` instead.
+- Do NOT pass `-nopackage` to `wails build`. Wails only generates the `-res.syso` (which embeds `build/windows/icon.ico`, the application manifest and version info) when `options.Pack` is true; with `-nopackage` the exe is produced silently without any icon resource, so Explorer/taskbar show a generic icon. The `-nopackage` flag only matters for non-Windows packaging and is never needed here.
 - The project targets Go 1.26 in `go.mod`, but `.golangci.yml` sets `run.go: '1.25'` so the linter can actually start. Do not change this unless the linter version is also updated.
 - Exported identifiers must have doc comments (`revive` `exported` rule).
 - Windows-only code uses `golang.org/x/sys/windows`, `syscall` lazy DLLs, and DPAPI. Cross-platform refactors need careful review.
