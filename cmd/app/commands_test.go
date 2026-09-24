@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/oxcafedead/passone/internal/app"
+	"github.com/oxcafedead/passone/internal/version"
 )
 
 func TestPositionalKeepsStdinDash(t *testing.T) {
@@ -112,6 +113,21 @@ func testFile(t *testing.T, content string) *os.File {
 		t.Fatal(err)
 	}
 	return f
+}
+
+func TestCmdVersion(t *testing.T) {
+	e := newTestEnv(t)
+	cmd := commands()["version"]
+	if cmd == nil {
+		t.Fatal("version command not registered")
+	}
+	if err := cmd(e, nil); err != nil {
+		t.Fatalf("version command: %v", err)
+	}
+	out := readOut(t, e.stdout)
+	if !strings.Contains(out, "PassOne") || !strings.Contains(out, version.Version) {
+		t.Fatalf("version output = %q", out)
+	}
 }
 
 func TestCmdInit(t *testing.T) {

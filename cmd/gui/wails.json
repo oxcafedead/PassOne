@@ -9,5 +9,12 @@
   "author": {
     "name": "Artem Vozhdayenko",
     "email": "a.vozhdaenko@gmail.com"
+  },
+  "info": {
+    "companyName": "PassOne",
+    "productName": "PassOne",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright (c) 2025 Artem Vozhdayenko",
+    "comments": "Native Windows pass client"
   }
 }

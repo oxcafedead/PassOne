@@ -26,6 +26,7 @@ Windows password manager (`passone`) backed by a self-contained OpenPGP store. I
 | `internal/security` | DPAPI sealing, memory zeroing |
 | `internal/config` | Config persistence, ACLs, paths |
 | `internal/cliputil` | Clipboard write + auto-clear |
+| `internal/version` | Single release-version source; injected via `-ldflags` at build time |
 | `tests/interop` | PowerShell harness that validates against real GnuPG |
 
 ## Everyday commands
@@ -88,6 +89,19 @@ Recommended local order before pushing:
 1. `gofmt -w .`
 2. `go test ./...`
 3. `golangci-lint` (via `go run ...`)
+
+## Releases
+
+- Versioning is SemVer; releases are tagged `vMAJOR.MINOR.PATCH` on `main`.
+  Full policy, artifact list and verification steps live in `RELEASES.md`.
+- `.github/workflows/release.yml` triggers on `v*` tag pushes and produces a
+  **draft** GitHub Release. It: builds frontend → `go test ./...` → builds CLI
+  and GUI with `-ldflags -X .../internal/version.Version=<tag>` → packs
+  `passone-<ver>-windows-amd64.zip` and `passone-ui-<ver>-windows-amd64.zip`
+  → writes `SHA256SUMS.txt` → fills the body from the matching `CHANGELOG.md`
+  section. Publish is manual.
+- The Windows version resource for the GUI comes from a `productVersion` stamp
+  on `cmd/gui/wails.json` before `wails build`.
 
 ## Environment
 

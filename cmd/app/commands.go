@@ -12,6 +12,7 @@ import (
 	"github.com/oxcafedead/passone/internal/cliputil"
 	"github.com/oxcafedead/passone/internal/pgp"
 	"github.com/oxcafedead/passone/internal/sshx"
+	"github.com/oxcafedead/passone/internal/version"
 	"golang.org/x/term"
 )
 
@@ -39,6 +40,10 @@ func (e *env) eprint(a ...any)                 { _, _ = fmt.Fprint(e.stderr, a..
 func commands() map[string]func(*env, []string) error {
 	return map[string]func(*env, []string) error{
 		"help": func(e *env, _ []string) error { printUsage(); return nil },
+		"version": func(e *env, _ []string) error {
+			e.printf("PassOne %s\n", version.Version)
+			return nil
+		},
 
 		"init":           cmdInit,
 		"import-pgp-key": cmdImportPGP,

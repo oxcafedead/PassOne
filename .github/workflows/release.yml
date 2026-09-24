@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # The app targets Windows (systray, clipboard, WebView2), so artifacts are
+    # built on Windows. wails build performs its own packaging step, so the
+    # wails CLI is used directly rather than a Go-build wrapper.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the pre-release range in the notes is computable.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: cmd/gui/frontend/package.json
+          cache: npm
+          cache-dependency-path: cmd/gui/frontend/package-lock.json
+
+      - name: Build frontend assets
+        working-directory: cmd/gui/frontend
+        shell: pwsh
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run tests
+        shell: pwsh
+        run: go test ./...
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $ver = $tag -replace '^v', ''
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "ver=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Output "Releasing $tag (version $ver)"
+
+      - name: Build CLI binary
+        shell: pwsh
+        env:
+          VER: ${{ steps.version.outputs.tag }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\cli | Out-Null
+          go build -trimpath -ldflags "-s -w -X github.com/oxcafedead/passone/internal/version.Version=$env:VER" -o dist\cli\passone.exe ./cmd/app
+
+      # Windows file/product version comes from wails.json at packaging time.
+      # Stamp the tag version in before the GUI build so Explorer and task
+      # manager show the real release version.
+      - name: Stamp GUI version info
+        shell: pwsh
+        env:
+          VER: ${{ steps.version.outputs.ver }}
+        run: |
+          $cfg = Get-Content cmd\gui\wails.json -Raw | ConvertFrom-Json
+          $cfg.info.productVersion = $env:VER
+          $cfg | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 cmd\gui\wails.json
+
+      - name: Install Wails CLI
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+
+      - name: Build GUI binary
+        working-directory: cmd/gui
+        shell: pwsh
+        env:
+          VER: ${{ steps.version.outputs.tag }}
+        run: |
+          wails build -skipbindings -s -clean -ldflags "-X github.com/oxcafedead/passone/internal/version.Version=$env:VER"
+
+      - name: Verify GUI icon is embedded
+        shell: pwsh
+        run: go run ./tools/checkicon cmd/gui/build/bin/passone-ui.exe
+
+      - name: Package release archives
+        shell: pwsh
+        env:
+          VER: ${{ steps.version.outputs.ver }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist\passone-$env:VER-windows-amd64" | Out-Null
+          Copy-Item dist\cli\passone.exe "dist\passone-$env:VER-windows-amd64\"
+          Compress-Archive -Path "dist\passone-$env:VER-windows-amd64" -DestinationPath "dist\passone-$env:VER-windows-amd64.zip" -CompressionLevel Optimal
+
+          New-Item -ItemType Directory -Force -Path "dist\passone-ui-$env:VER-windows-amd64" | Out-Null
+          Copy-Item cmd\gui\build\bin\passone-ui.exe "dist\passone-ui-$env:VER-windows-amd64\"
+          Copy-Item dist\passone-$env:VER-windows-amd64\passone.exe "dist\passone-ui-$env:VER-windows-amd64\passone.exe"
+          Compress-Archive -Path "dist\passone-ui-$env:VER-windows-amd64" -DestinationPath "dist\passone-ui-$env:VER-windows-amd64.zip" -CompressionLevel Optimal
+
+      - name: Generate SHA256 checksums
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem dist\*.zip | Get-FileHash -Algorithm SHA256 | ForEach-Object {
+            "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf)
+          }
+          $lines | Out-File -Encoding ascii dist\SHA256SUMS.txt
+          Get-Content dist\SHA256SUMS.txt
+
+      - name: Write release notes
+        shell: pwsh
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $log = git log --oneline --no-merges "$env:TAG..HEAD"
+          $content = Get-Content CHANGELOG.md -Raw
+          $m = [regex]::Match($content, "(?ms)^## \[$([regex]::Escape($env:TAG))\].*?(?=^## \[|\z)")
+          $notes = @()
+          if ($m.Success) {
+            $notes += $m.Value.TrimEnd()
+          } else {
+            $notes += "## What's Changed"
+            $notes += ""
+            if ($log) { $notes += $log } else { $notes += "No changelog entry yet for this version." }
+          }
+          $notes += ""
+          $notes += "## Files"
+          $notes += ""
+          $notes += Get-ChildItem dist\*.zip | Select-Object -ExpandProperty Name
+          $notes += ""
+          $notes += "## Verify integrity"
+          $notes += ""
+          $notes += '    sha256sum -c SHA256SUMS.txt'
+          $notes += ""
+          $notes += "See RELEASES.md for checksum verification on Windows."
+          $notes -join "`n" | Set-Content -Encoding utf8 release-notes.md
+
+      - name: Publish draft release
+        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          name: PassOne ${{ steps.version.outputs.tag }}
+          body_path: ${{ github.workspace }}/release-notes.md
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt

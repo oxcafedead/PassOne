@@ -29,6 +29,17 @@ Unlike most clients, it does **not** need `gpg.exe`, `git.exe`, or `ssh.exe` ins
 
 ## Installation
 
+### Download a release
+
+Prebuilt binaries are published as GitHub Releases for every `v*` tag:
+
+- `passone-vX.Y.Z-windows-amd64.zip` — CLI (`passone.exe`)
+- `passone-ui-vX.Y.Z-windows-amd64.zip` — GUI (`passone-ui.exe`) plus the CLI
+
+Releases carry a `SHA256SUMS.txt` checksum file. See
+[RELEASES.md](./RELEASES.md) for the full artifact list and verification
+commands.
+
 ### From source
 
 Requirements:

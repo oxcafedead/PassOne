@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/oxcafedead/passone/internal/version"
 )
 
 const usage = `PassOne - native Windows pass client (CLI proof of concept)
@@ -39,7 +41,8 @@ Session
   config                        Show configuration
 
 Other
-  help                          Show this help
+  version                        Print the application version
+  help                           Show this help
 
 Security notes:
   - Private keys and passphrases are kept in memory only while unlocked.
@@ -54,6 +57,11 @@ func main() {
 		return
 	}
 	cmd, args := os.Args[1], os.Args[2:]
+
+	if cmd == "--version" || cmd == "-version" || cmd == "-v" {
+		_, _ = fmt.Printf("PassOne %s\n", version.Version)
+		return
+	}
 
 	e := &env{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}
 	a, err := createApp()
