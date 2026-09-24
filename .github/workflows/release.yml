@@ -147,13 +147,19 @@ jobs:
           $notes -join "`n" | Set-Content -Encoding utf8 release-notes.md
 
       - name: Publish draft release
-        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: true
-          prerelease: false
-          name: PassOne ${{ steps.version.outputs.tag }}
-          body_path: ${{ github.workspace }}/release-notes.md
-          files: |
-            dist/*.zip
-            dist/SHA256SUMS.txt
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # If a previous run left a partial draft for this tag, drop it so
+          # re-runs create a clean release.
+          $draft = gh release view "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>$null | Out-String
+          if ($draft.Trim() -eq "true") {
+            gh release delete "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --yes
+          }
+          gh release create "$env:GITHUB_REF_NAME" `
+            --repo "$env:GITHUB_REPOSITORY" `
+            dist/*.zip dist/SHA256SUMS.txt `
+            --draft `
+            --title "PassOne $env:GITHUB_REF_NAME" `
+            --notes-file release-notes.md
