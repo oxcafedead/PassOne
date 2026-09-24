@@ -1825,6 +1825,54 @@ func TestOpenLocalStoreValidation(t *testing.T) {
 	}
 }
 
+func TestStoreRemoteURL(t *testing.T) {
+	a := newTestApp(t)
+	if got := a.StoreRemoteURL(); got != "" {
+		t.Fatalf("StoreRemoteURL without store = %q, want empty", got)
+	}
+
+	// A plain pass store (no git) reports no remote.
+	plainDir := filepath.Join(t.TempDir(), "plain")
+	if _, err := store.Create(plainDir, []string{"DEADBEEF"}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if err := a.OpenLocalStore(plainDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if got := a.StoreRemoteURL(); got != "" {
+		t.Fatalf("StoreRemoteURL for non-git store = %q, want empty", got)
+	}
+
+	// A store opened locally inside a git repository reports the origin URL.
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+	if _, err := goGit.PlainInit(remoteDir, true); err != nil {
+		t.Fatalf("PlainInit bare: %v", err)
+	}
+	workDir := filepath.Join(t.TempDir(), "work")
+	if _, err := store.Create(workDir, []string{"DEADBEEF"}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	repo, err := goGit.PlainInit(workDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	if _, err := repo.CreateRemote(&goGitConfig.RemoteConfig{Name: "origin", URLs: []string{remoteDir}}); err != nil {
+		t.Fatalf("CreateRemote: %v", err)
+	}
+	if err := gitx.Add(workDir, ".gpg-id"); err != nil {
+		t.Fatalf("gitx.Add: %v", err)
+	}
+	if _, err := gitx.Commit(workDir, "init store", "Tester", "t@example.com"); err != nil {
+		t.Fatalf("gitx.Commit: %v", err)
+	}
+	if err := a.OpenLocalStore(workDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if got := a.StoreRemoteURL(); got != remoteDir {
+		t.Fatalf("StoreRemoteURL = %q, want %q", got, remoteDir)
+	}
+}
+
 func TestUnlockPGPWrongPassphrase(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)

@@ -637,6 +637,26 @@ func (a *App) openConfiguredStoreLocked() error {
 	return nil
 }
 
+// StoreRemoteURL returns the origin remote URL of the active store, or "" for
+// a local-only or plain directory store. It reads the repository state
+// directly, so UI features driven by it (sync button visibility, settings
+// display) reflect the real remote rather than a config mirror that only the
+// clone flow updates.
+func (a *App) StoreRemoteURL() string {
+	if err := a.ensureStoreOpen(); err != nil {
+		return ""
+	}
+	st := a.storePath()
+	if st == nil || !isGitRepo(st.Root()) {
+		return ""
+	}
+	state, err := gitx.GetRepoState(st.Root())
+	if err != nil || !state.HasRemote {
+		return ""
+	}
+	return state.RemoteURL
+}
+
 // ShowPassword decrypts and returns the full plaintext of a password file.
 func (a *App) ShowPassword(name string) ([]byte, error) {
 	if err := a.requireUnlocked(); err != nil {

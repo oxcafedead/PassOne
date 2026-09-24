@@ -425,7 +425,7 @@ func (g *GUI) CurrentSettings() SettingsInfo {
 	return SettingsInfo{
 		DataDir:               g.core.DataDir(),
 		StorePath:             cfg.StorePath,
-		GitRemote:             cfg.GitRemote,
+		GitRemote:             g.core.StoreRemoteURL(),
 		PGPKeyFingerprint:     cfg.PGPKeyFingerprint,
 		SSHKeyID:              cfg.SSHKeyID,
 		AutoLockMinutes:       cfg.AutoLockMinutes,
