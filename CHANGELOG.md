@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.1.0] - 2026-09-24
+
 ### Added
 
 - Versioned releases: a tag-driven [`Release`](.github/workflows/release.yml)
