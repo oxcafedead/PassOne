@@ -97,7 +97,8 @@ Recommended local order before pushing:
 - `.github/workflows/release.yml` triggers on `v*` tag pushes and produces a
   **draft** GitHub Release. It: builds frontend → `go test ./...` → builds CLI
   and GUI with `-ldflags -X .../internal/version.Version=<tag>` → packs
-  `passone-<ver>-windows-amd64.zip` and `passone-ui-<ver>-windows-amd64.zip`
+  `passone-cli-<ver>-windows-amd64.zip`, `passone-ui-<ver>-windows-amd64.zip`
+  and `passone-all-<ver>-windows-amd64.zip` (GUI + CLI)
   → writes `SHA256SUMS.txt` → fills the body from the matching `CHANGELOG.md`
   section. Publish is manual.
 - The Windows version resource for the GUI comes from a `productVersion` stamp

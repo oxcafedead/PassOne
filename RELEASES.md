@@ -39,7 +39,7 @@ Local builds never claim a release version; `passone version` prints
 3. Stamps `productVersion` into `cmd/gui/wails.json` and builds the GUI with
    `wails build`, so the Windows file/version resource and the embedded version
    both match the tag.
-4. Packs the two archives below and computes SHA-256 checksums.
+4. Packs the three archives below and computes SHA-256 checksums.
 5. Opens a **draft** GitHub Release populated from the matching `CHANGELOG.md`
    section. Review the notes, then click "Publish release" manually.
 
@@ -47,8 +47,9 @@ Local builds never claim a release version; `passone version` prints
 
 | Artifact | Contents |
 |----------|----------|
-| `passone-vX.Y.Z-windows-amd64.zip` | `passone.exe` (CLI) |
-| `passone-ui-vX.Y.Z-windows-amd64.zip` | `passone-ui.exe` (GUI) **and** `passone.exe` (CLI) |
+| `passone-cli-vX.Y.Z-windows-amd64.zip` | `passone.exe` (CLI) |
+| `passone-ui-vX.Y.Z-windows-amd64.zip` | `passone-ui.exe` (GUI) |
+| `passone-all-vX.Y.Z-windows-amd64.zip` | `passone-ui.exe` (GUI) **and** `passone.exe` (CLI) |
 | `SHA256SUMS.txt` | SHA-256 of every `.zip` |
 
 Only `windows-amd64` is built: the app is Windows-specific (systray,

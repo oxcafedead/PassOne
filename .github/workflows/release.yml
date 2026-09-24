@@ -100,14 +100,18 @@ jobs:
         env:
           VER: ${{ steps.version.outputs.ver }}
         run: |
-          New-Item -ItemType Directory -Force -Path "dist\passone-$env:VER-windows-amd64" | Out-Null
-          Copy-Item dist\cli\passone.exe "dist\passone-$env:VER-windows-amd64\"
-          Compress-Archive -Path "dist\passone-$env:VER-windows-amd64" -DestinationPath "dist\passone-$env:VER-windows-amd64.zip" -CompressionLevel Optimal
+          New-Item -ItemType Directory -Force -Path "dist\passone-cli-$env:VER-windows-amd64" | Out-Null
+          Copy-Item dist\cli\passone.exe "dist\passone-cli-$env:VER-windows-amd64\"
+          Compress-Archive -Path "dist\passone-cli-$env:VER-windows-amd64" -DestinationPath "dist\passone-cli-$env:VER-windows-amd64.zip" -CompressionLevel Optimal
 
           New-Item -ItemType Directory -Force -Path "dist\passone-ui-$env:VER-windows-amd64" | Out-Null
           Copy-Item cmd\gui\build\bin\passone-ui.exe "dist\passone-ui-$env:VER-windows-amd64\"
-          Copy-Item dist\passone-$env:VER-windows-amd64\passone.exe "dist\passone-ui-$env:VER-windows-amd64\passone.exe"
           Compress-Archive -Path "dist\passone-ui-$env:VER-windows-amd64" -DestinationPath "dist\passone-ui-$env:VER-windows-amd64.zip" -CompressionLevel Optimal
+
+          New-Item -ItemType Directory -Force -Path "dist\passone-all-$env:VER-windows-amd64" | Out-Null
+          Copy-Item cmd\gui\build\bin\passone-ui.exe "dist\passone-all-$env:VER-windows-amd64\"
+          Copy-Item dist\cli\passone.exe "dist\passone-all-$env:VER-windows-amd64\"
+          Compress-Archive -Path "dist\passone-all-$env:VER-windows-amd64" -DestinationPath "dist\passone-all-$env:VER-windows-amd64.zip" -CompressionLevel Optimal
 
       - name: Generate SHA256 checksums
         shell: pwsh
