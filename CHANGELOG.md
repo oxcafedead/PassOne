@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.1.1] - 2026-09-24
+
+### Fixed
+
+- The sync button now appears for git-backed stores opened outside the clone
+  flow (for example via the folder picker); previously it was hidden unless the
+  store had been cloned through the app.
+- Draft releases are published with the preinstalled `gh` CLI instead of
+  `softprops/action-gh-release`, which failed with a request-body length error.
+
+### Changed
+
+- Release archives are now split into three: `passone-cli`, `passone-ui`
+  (GUI only) and `passone-all` (GUI + CLI), each with SHA-256 checksums.
+
 ## [v0.1.0] - 2026-09-24
 
 ### Added
