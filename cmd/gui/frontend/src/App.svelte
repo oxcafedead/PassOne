@@ -642,6 +642,7 @@ let lockPass: string = ''
       const msg = await ImportPGPKeyFile(pgpPicked, pgpPass, lockPass)
       pgpPicked = ''
       pgpPass = ''
+      lockPass = ''
       flash(msg)
       await loadSettings()
     } catch (e) {
@@ -664,6 +665,7 @@ let lockPass: string = ''
       const msg = await ImportSSHKeyFile(sshPicked, sshPass, lockPass)
       sshPicked = ''
       sshPass = ''
+      lockPass = ''
       flash(msg)
       await loadSettings()
     } catch (e) {
@@ -679,6 +681,7 @@ let lockPass: string = ''
     setupErr = ''
     try {
       await LoadSSHKey(lockPass)
+      lockPass = ''
       sshPass = ''
       sshLoaded = true
       flash('SSH key loaded')
