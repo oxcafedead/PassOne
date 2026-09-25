@@ -13,6 +13,8 @@ Unlike most clients, it does **not** need `gpg.exe`, `git.exe`, or `ssh.exe` ins
 
 > ⚠️ Windows-only. PassOne uses DPAPI, the system tray, Windows theme registry values, and the Win32 clipboard.
 
+![PassOne Screenshot in light and dark themes](./passone-screenshot.png)
+
 ---
 
 ## Features
