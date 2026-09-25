@@ -49,6 +49,13 @@ type App struct {
 // ErrLocked is returned when an operation needs unlocked key material.
 var ErrLocked = errors.New("the application is locked; run unlock first")
 
+// ErrSplitVault reports that the stored key blobs are not all sealed under
+// the same lock password, which is the state an interrupted lock password
+// change leaves behind: one blob published under the new key while the other
+// is still under the old one. No key material is lost, but no single password
+// opens the whole vault either, so the user has to try both.
+var ErrSplitVault = errors.New("the stored keys are sealed under different lock passwords")
+
 // New boots the application: resolves data paths, opens the vault and loads
 // configuration. No key material is loaded until Unlock.
 func New() (*App, error) {
@@ -317,6 +324,43 @@ func (a *App) LoadStoredSSHKey(lockPassword []byte) error {
 	return nil
 }
 
+// storedKey is one sealed key file on disk.
+type storedKey struct {
+	name string
+	path string
+}
+
+// storedKeys lists the sealed key blobs in the order an unlock, a re-key or an
+// import check has to process them.
+func (a *App) storedKeys() []storedKey {
+	return []storedKey{
+		{"OpenPGP", a.paths.PGPKeyFile},
+		{"SSH", a.paths.SSHKeyFile},
+	}
+}
+
+// splitVaultError reports the split-vault condition: the blob at failedPath
+// does not open with the derived key while the other stored blob does. Without
+// it the only symptom is one integrity error per attempt, and a user who has
+// just changed their lock password concludes the vault is corrupt. It returns
+// nil when there is no such asymmetry, leaving the caller to report the real
+// failure, and never retains either plaintext.
+func (a *App) splitVaultError(key []byte, failedName, failedPath string) error {
+	for _, k := range a.storedKeys() {
+		if k.path == failedPath || !fileExists(k.path) {
+			continue
+		}
+		payload, err := a.vault.LoadSealed(key, k.path)
+		if err != nil {
+			continue
+		}
+		security.Zero(payload)
+		return fmt.Errorf("%w: the stored %s key does not open with this lock password but the stored %s key does, so a lock password change was interrupted; use the lock password from before that change",
+			ErrSplitVault, failedName, k.name)
+	}
+	return nil
+}
+
 func (a *App) unlockPGPLocked(lockPassword []byte) error {
 	if !a.HasStoredPGPKey() {
 		return nil
@@ -328,6 +372,9 @@ func (a *App) unlockPGPLocked(lockPassword []byte) error {
 	defer security.Zero(key)
 	payload, err := a.vault.LoadSealed(key, a.paths.PGPKeyFile)
 	if err != nil {
+		if split := a.splitVaultError(key, "OpenPGP", a.paths.PGPKeyFile); split != nil {
+			return split
+		}
 		return fmt.Errorf("unable to read the stored OpenPGP key: %v", err)
 	}
 	defer security.Zero(payload)
@@ -354,6 +401,9 @@ func (a *App) unlockSSHLocked(lockPassword []byte) error {
 	defer security.Zero(key)
 	payload, err := a.vault.LoadSealed(key, a.paths.SSHKeyFile)
 	if err != nil {
+		if split := a.splitVaultError(key, "SSH", a.paths.SSHKeyFile); split != nil {
+			return split
+		}
 		return fmt.Errorf("unable to read the stored SSH key: %v", err)
 	}
 	defer security.Zero(payload)
@@ -508,13 +558,17 @@ func (a *App) verifyImportLockLocked(lockPassword []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range []string{a.paths.PGPKeyFile, a.paths.SSHKeyFile} {
-		if !fileExists(p) {
+	for _, k := range a.storedKeys() {
+		if !fileExists(k.path) {
 			continue
 		}
-		payload, err := a.vault.LoadSealed(key, p)
+		payload, err := a.vault.LoadSealed(key, k.path)
 		security.Zero(payload)
 		if err != nil {
+			if split := a.splitVaultError(key, k.name, k.path); split != nil {
+				security.Zero(key)
+				return nil, split
+			}
 			security.Zero(key)
 			return nil, errors.New("the lock password does not match the key already stored; import under the current lock password")
 		}
@@ -1354,10 +1408,7 @@ type keyBlob struct {
 // oldKey. Callers must hold a.mu.
 func (a *App) resealKeyBlobsLocked(oldKey, newKey []byte) error {
 	var blobs []keyBlob
-	for _, f := range []struct{ name, path string }{
-		{"OpenPGP", a.paths.PGPKeyFile},
-		{"SSH", a.paths.SSHKeyFile},
-	} {
+	for _, f := range a.storedKeys() {
 		if !fileExists(f.path) {
 			continue
 		}

@@ -23,6 +23,7 @@ import (
 	goGit "github.com/go-git/go-git/v5"
 	goGitConfig "github.com/go-git/go-git/v5/config"
 	"github.com/oxcafedead/passone/internal/gitx"
+	"github.com/oxcafedead/passone/internal/security"
 	"github.com/oxcafedead/passone/internal/sshx"
 	"github.com/oxcafedead/passone/internal/store"
 	"golang.org/x/crypto/ssh"
@@ -438,6 +439,123 @@ func TestChangeLockPasswordStageFailureLeavesEveryBlobAlone(t *testing.T) {
 	b.Lock()
 	if err := b.Unlock([]byte("new-lock-pass")); err == nil {
 		t.Fatal("the new lock password must not open the vault")
+	}
+}
+
+// splitVault republishes only the OpenPGP blob under a second lock password,
+// which is exactly the state a crash between the two commits of a lock
+// password change leaves behind. The re-key rolls that back, so the split has
+// to be reproduced directly to be tested.
+func splitVault(t *testing.T, a *App) {
+	t.Helper()
+	salt, err := a.vault.LoadOrCreateSalt()
+	if err != nil {
+		t.Fatalf("LoadOrCreateSalt: %v", err)
+	}
+	defer security.Zero(salt)
+	oldKey := security.DeriveKey([]byte(testLockPass), salt)
+	newKey := security.DeriveKey([]byte("new-lock-pass"), salt)
+	defer security.Zero(oldKey)
+	defer security.Zero(newKey)
+
+	payload, err := a.vault.LoadSealed(oldKey, a.paths.PGPKeyFile)
+	if err != nil {
+		t.Fatalf("LoadSealed: %v", err)
+	}
+	defer security.Zero(payload)
+	staged, err := a.vault.Stage(newKey, a.paths.PGPKeyFile, payload)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if err := staged.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+}
+
+// A split vault must be reported as such from both sides. Reporting it as a
+// plain integrity failure is what left a user with a vault they believed was
+// corrupt and no way to learn that either password worked for part of it.
+func TestSplitVaultIsDiagnosedFromBothPasswords(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	splitVault(t, a)
+
+	// The pre-change password opens SSH but not OpenPGP.
+	err := a.Unlock([]byte(testLockPass))
+	if !errors.Is(err, ErrSplitVault) {
+		t.Fatalf("Unlock with the old password = %v, want a split vault error", err)
+	}
+	if !strings.Contains(err.Error(), "OpenPGP") || !strings.Contains(err.Error(), "SSH") {
+		t.Fatalf("the error should name both keys: %v", err)
+	}
+
+	// The interrupted change's new password opens OpenPGP but not SSH.
+	err = a.Unlock([]byte("new-lock-pass"))
+	if !errors.Is(err, ErrSplitVault) {
+		t.Fatalf("Unlock with the new password = %v, want a split vault error", err)
+	}
+	if !strings.Contains(err.Error(), "SSH") {
+		t.Fatalf("the error should name the key that will not open: %v", err)
+	}
+	if a.IsUnlocked() {
+		t.Fatal("neither password may leave the vault unlocked")
+	}
+}
+
+// The split must not be reported for an ordinary wrong password: there both
+// blobs stay unreadable and the integrity error is the accurate answer.
+func TestWrongPasswordIsNotReportedAsSplit(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	err := a.Unlock([]byte("not-the-password"))
+	if err == nil {
+		t.Fatal("Unlock with a wrong password should fail")
+	}
+	if errors.Is(err, ErrSplitVault) {
+		t.Fatalf("a wrong password must not be reported as a split vault: %v", err)
+	}
+	if !strings.Contains(err.Error(), "unable to read the stored OpenPGP key") {
+		t.Fatalf("unlock error = %v", err)
+	}
+
+	// A vault holding a single key has nothing to compare against.
+	b := newTestApp(t)
+	if _, err := b.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if err := b.Unlock([]byte("not-the-password")); errors.Is(err, ErrSplitVault) {
+		t.Fatalf("a single-key vault must not be reported as split: %v", err)
+	}
+}
+
+// Importing into a split vault must not tell the user their lock password is
+// wrong, which is what it did before: they were typing the password that does
+// open the other blob.
+func TestImportIntoSplitVaultIsDiagnosed(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	splitVault(t, a)
+
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); !errors.Is(err, ErrSplitVault) {
+		t.Fatalf("ImportSSHKey into a split vault = %v, want a split vault error", err)
+	}
+	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte("new-lock-pass")); !errors.Is(err, ErrSplitVault) {
+		t.Fatalf("ImportPGPKey into a split vault = %v, want a split vault error", err)
 	}
 }
 
