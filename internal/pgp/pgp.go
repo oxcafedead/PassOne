@@ -75,6 +75,13 @@ func (s *Service) DescribeOwn() []*KeyInfo {
 	return Describe(s.entities)
 }
 
+// HasSecretMaterial reports whether decrypted private keys or a passphrase are
+// currently resident in memory. Callers use it to decide whether the idle
+// auto-lock still has anything to drop.
+func (s *Service) HasSecretMaterial() bool {
+	return len(s.entities) > 0 || len(s.passphrase) > 0
+}
+
 // ImportSecret validates and takes ownership of an armored secret key block.
 // The passphrase is validated and the entity list is kept decrypted in memory.
 func (s *Service) ImportSecret(block []byte, passphrase []byte) ([]*KeyInfo, error) {

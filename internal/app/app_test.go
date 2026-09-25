@@ -1960,6 +1960,162 @@ func TestStartAutoLockWithZeroTimeout(t *testing.T) {
 	a.Lock()
 }
 
+// withShortAutoLockTick shrinks the idle re-evaluation interval and returns the
+// restore func. Idle timeouts are minute-granular, so the goroutine's tick is
+// the only knob a test can turn to observe a drop.
+func withShortAutoLockTick(t *testing.T) func() {
+	t.Helper()
+	prev := autoLockTick
+	autoLockTick = time.Millisecond
+	return func() { autoLockTick = prev }
+}
+
+// waitForCondition polls cond until it holds or the test budget runs out.
+func waitForCondition(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// keyDiskLen reads the retained vault key length under the app lock.
+func keyDiskLen(a *App) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.keyDisk)
+}
+
+// timerChan returns the current idle timer stop channel under the app lock.
+func timerChan(a *App) chan struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stopTimer
+}
+
+// ImportSSHKey leaves a decrypted signer resident without starting a session,
+// so the idle auto-lock has to bound it too.
+func TestAutoLockDropsResidentSSHKeyWhileLocked(t *testing.T) {
+	defer withShortAutoLockTick(t)()
+	a := newTestApp(t)
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if a.IsUnlocked() {
+		t.Fatal("expected the app to stay locked after import")
+	}
+	if !a.HasSSHKeyLoaded() {
+		t.Fatal("expected the SSH signer to be resident after import")
+	}
+	a.startAutoLockWithTimeout(time.Millisecond)
+	waitForCondition(t, "the idle auto-lock to drop the SSH signer", func() bool {
+		return !a.HasSSHKeyLoaded()
+	})
+}
+
+// LoadStoredSSHKey is reachable from the locked UI, so the signer it loads
+// while the session stays locked must not outlive the idle timeout.
+func TestAutoLockDropsStoredSSHKeyLoadedWhileLocked(t *testing.T) {
+	defer withShortAutoLockTick(t)()
+	a := newTestApp(t)
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	a.Lock()
+	if err := a.LoadStoredSSHKey([]byte(testLockPass)); err != nil {
+		t.Fatalf("LoadStoredSSHKey: %v", err)
+	}
+	if a.IsUnlocked() {
+		t.Fatal("expected LoadStoredSSHKey to leave the session locked")
+	}
+	if !a.HasSSHKeyLoaded() {
+		t.Fatal("expected LoadStoredSSHKey to load the signer for transport")
+	}
+	a.startAutoLockWithTimeout(time.Millisecond)
+	waitForCondition(t, "the idle auto-lock to drop the transport signer", func() bool {
+		return !a.HasSSHKeyLoaded()
+	})
+}
+
+// ImportPGPKey leaves decrypted entities and the passphrase resident without
+// starting a session, so the idle auto-lock has to drop those too.
+func TestAutoLockDropsImportedPGPKeyWhileLocked(t *testing.T) {
+	defer withShortAutoLockTick(t)()
+	a := newTestApp(t)
+	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if a.IsUnlocked() {
+		t.Fatal("expected the app to stay locked after import")
+	}
+	if !a.pgpSvc.HasSecretMaterial() {
+		t.Fatal("expected decrypted OpenPGP entities to be resident after import")
+	}
+	a.startAutoLockWithTimeout(time.Millisecond)
+	waitForCondition(t, "the idle auto-lock to drop the OpenPGP entities", func() bool {
+		return !a.pgpSvc.HasSecretMaterial()
+	})
+}
+
+// The vault key is only ever read by ChangeLockPassword, which needs an
+// unlocked session, so the key-loading paths must not retain it.
+func TestKeyLoadingPathsDoNotRetainKeyDisk(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if n := keyDiskLen(a); n != 0 {
+		t.Fatalf("ImportPGPKey retained %d bytes of the vault key", n)
+	}
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if n := keyDiskLen(a); n != 0 {
+		t.Fatalf("ImportSSHKey retained %d bytes of the vault key", n)
+	}
+	if err := a.LoadStoredSSHKey([]byte(testLockPass)); err != nil {
+		t.Fatalf("LoadStoredSSHKey: %v", err)
+	}
+	if n := keyDiskLen(a); n != 0 {
+		t.Fatalf("LoadStoredSSHKey retained %d bytes of the vault key", n)
+	}
+	if !a.HasSSHKeyLoaded() {
+		t.Fatal("expected LoadStoredSSHKey to keep the signer for transport")
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if keyDiskLen(a) == 0 {
+		t.Fatal("expected an unlocked session to retain the vault key")
+	}
+}
+
+// Raising the idle timeout while key material is resident must arm the timer;
+// otherwise the material it is meant to bound has nothing watching it.
+func TestSetAutoLockArmsTimerForResidentKeyMaterial(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if err := a.SetAutoLock(0); err != nil {
+		t.Fatalf("SetAutoLock(0): %v", err)
+	}
+	disabled := timerChan(a)
+	if err := a.SetAutoLock(1); err != nil {
+		t.Fatalf("SetAutoLock(1): %v", err)
+	}
+	if timerChan(a) == disabled {
+		t.Fatal("SetAutoLock must re-arm the idle timer while key material is resident")
+	}
+	if !a.HasSSHKeyLoaded() {
+		t.Fatal("re-arming the timer must not drop key material on its own")
+	}
+}
+
 func TestStoredStoresReadDirError(t *testing.T) {
 	a := newTestApp(t)
 	// Remove the stores directory so ReadDir returns an error.

@@ -409,6 +409,23 @@ func TestSetPassphraseNil(t *testing.T) {
 	}
 }
 
+func TestHasSecretMaterialTracksResidency(t *testing.T) {
+	svc := New()
+	if svc.HasSecretMaterial() {
+		t.Fatal("a fresh service must not report resident key material")
+	}
+	// A retained passphrase alone is enough to keep the service "resident":
+	// Lock is the only thing that wipes it.
+	svc.setPassphrase([]byte("pass"))
+	if !svc.HasSecretMaterial() {
+		t.Fatal("a retained passphrase must count as resident key material")
+	}
+	svc.Lock()
+	if svc.HasSecretMaterial() {
+		t.Fatal("Lock must clear the resident flag")
+	}
+}
+
 func TestPubKeyAlgoName(t *testing.T) {
 	cases := []struct {
 		algo packet.PublicKeyAlgorithm

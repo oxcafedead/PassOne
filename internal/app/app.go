@@ -155,7 +155,8 @@ func (a *App) StoredStores() []string {
 // vault using key_disk = KDF(lockPassword). lockPassword is mandatory and
 // non-empty so every stored key is always protected, even when the key itself
 // has an empty passphrase. Importing does not start an unlocked session: local
-// secrets stay gated on an explicit Unlock.
+// secrets stay gated on an explicit Unlock. The decrypted entities are still
+// resident afterwards, so the idle auto-lock is armed to drop them.
 func (a *App) ImportPGPKey(block, keyPassphrase, lockPassword []byte) ([]*pgp.KeyInfo, error) {
 	if len(lockPassword) == 0 {
 		return nil, errors.New("a non-empty lock password is required to import a key")
@@ -178,9 +179,9 @@ func (a *App) ImportPGPKey(block, keyPassphrase, lockPassword []byte) ([]*pgp.Ke
 		return nil, fmt.Errorf("unable to store the OpenPGP key locally: %v", err)
 	}
 	a.mu.Lock()
-	a.keyDisk = append(a.keyDisk[:0], key...)
 	a.cfg.PGPKeyFingerprint = infos[0].Fingerprint
 	a.mu.Unlock()
+	a.noteKeyMaterialResident()
 	if err := a.saveConfig(); err != nil {
 		return nil, err
 	}
@@ -192,7 +193,8 @@ func (a *App) ImportPGPKey(block, keyPassphrase, lockPassword []byte) ([]*pgp.Ke
 // passphrase are stored locally, sealed by the vault using
 // key_disk = KDF(lockPassword). The decrypted signer is kept in memory so
 // transport operations (clone) work without a full session unlock, but the
-// session itself stays locked.
+// session itself stays locked and the idle auto-lock is armed to drop the
+// signer again.
 func (a *App) ImportSSHKey(pem, keyPassphrase, lockPassword []byte) (*sshx.SSHKey, error) {
 	if len(lockPassword) == 0 {
 		return nil, errors.New("a non-empty lock password is required to import a key")
@@ -215,10 +217,10 @@ func (a *App) ImportSSHKey(pem, keyPassphrase, lockPassword []byte) (*sshx.SSHKe
 		return nil, fmt.Errorf("unable to store the SSH key locally: %v", err)
 	}
 	a.mu.Lock()
-	a.keyDisk = append(a.keyDisk[:0], key...)
 	a.sshKey = k
 	a.cfg.SSHKeyID = k.Fingerprint()
 	a.mu.Unlock()
+	a.noteKeyMaterialResident()
 	if err := a.saveConfig(); err != nil {
 		return nil, err
 	}
@@ -249,7 +251,7 @@ func (a *App) Unlock(lockPassword []byte) error {
 	}
 	a.finalizeUnlockLocked()
 	a.mu.Unlock()
-	a.startAutoLock()
+	a.noteKeyMaterialResident()
 	a.notifyUnlocked()
 	return nil
 }
@@ -270,7 +272,7 @@ func (a *App) UnlockPGP(lockPassword []byte) error {
 	}
 	a.finalizeUnlockLocked()
 	a.mu.Unlock()
-	a.startAutoLock()
+	a.noteKeyMaterialResident()
 	a.notifyUnlocked()
 	return nil
 }
@@ -287,21 +289,32 @@ func (a *App) UnlockSSH(lockPassword []byte) error {
 	}
 	a.finalizeUnlockLocked()
 	a.mu.Unlock()
-	a.startAutoLock()
+	a.noteKeyMaterialResident()
 	a.notifyUnlocked()
 	return nil
 }
 
 // LoadStoredSSHKey decrypts the stored SSH key into memory for transport
 // operations (clone, sync) without starting an unlocked session. The session
-// stays locked until an explicit Unlock.
+// stays locked until an explicit Unlock, and the idle auto-lock is armed so
+// the signer does not stay resident indefinitely.
 func (a *App) LoadStoredSSHKey(lockPassword []byte) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if !a.HasStoredSSHKey() {
+		a.mu.Unlock()
 		return errors.New("no SSH key is stored; import one first")
 	}
-	return a.unlockSSHLocked(lockPassword)
+	if err := a.unlockSSHLocked(lockPassword); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	// Only the signer is needed for transport; the vault key that unlocked it
+	// has no reader on this path, so it is wiped rather than kept for a
+	// session that was never started.
+	a.dropKeyDiskLocked()
+	a.mu.Unlock()
+	a.noteKeyMaterialResident()
+	return nil
 }
 
 func (a *App) unlockPGPLocked(lockPassword []byte) error {
@@ -453,8 +466,7 @@ func (a *App) lockLocked() {
 	a.sshKey = nil
 	a.store = nil
 	a.unlocked = false
-	security.Zero(a.keyDisk)
-	a.keyDisk = nil
+	a.dropKeyDiskLocked()
 }
 
 // setKeyDisk stores a copy of the derived vault key in memory. The caller must
@@ -462,6 +474,15 @@ func (a *App) lockLocked() {
 func (a *App) setKeyDisk(key []byte) {
 	security.Zero(a.keyDisk)
 	a.keyDisk = append(a.keyDisk[:0], key...)
+}
+
+// dropKeyDiskLocked wipes the retained vault key. Callers must hold a.mu. The
+// key is only ever read by ChangeLockPassword, which requires an unlocked
+// session, so paths that load key material purely for transport must not keep
+// it around.
+func (a *App) dropKeyDiskLocked() {
+	security.Zero(a.keyDisk)
+	a.keyDisk = nil
 }
 
 // deriveKeyDisk computes key_disk = Argon2id(passphrase, salt) using the
@@ -562,6 +583,28 @@ func (a *App) requireUnlocked() error {
 	return nil
 }
 
+// keyMaterialResidentLocked reports whether decrypted key material is held in
+// memory. That is true for an unlocked session, but also for the paths that
+// load a key without starting one (key import, LoadStoredSSHKey): those keep an
+// entity list or a signer resident so transport operations work while the UI
+// still reports "locked". The idle auto-lock must cover all of them.
+// Callers must hold a.mu.
+func (a *App) keyMaterialResidentLocked() bool {
+	return a.sshKey != nil || len(a.keyDisk) > 0 || a.pgpSvc.HasSecretMaterial()
+}
+
+// noteKeyMaterialResident refreshes the idle clock and (re)arms the auto-lock
+// timer after key material is admitted to memory. Every path that loads a key
+// must call it: a timer only runs once it has been armed here, and an unarmed
+// session leaves key material resident until process exit. Must be called
+// without holding a.mu.
+func (a *App) noteKeyMaterialResident() {
+	a.mu.Lock()
+	a.touchLocked()
+	a.mu.Unlock()
+	a.startAutoLock()
+}
+
 // startAutoLock uses the configured timeout.
 func (a *App) startAutoLock() {
 	a.mu.Lock()
@@ -569,6 +612,10 @@ func (a *App) startAutoLock() {
 	a.mu.Unlock()
 	a.startAutoLockWithTimeout(timeout)
 }
+
+// autoLockTick is how often the idle timer re-evaluates resident key material.
+// It is a variable so tests can shorten the interval.
+var autoLockTick = 10 * time.Second
 
 func (a *App) startAutoLockWithTimeout(timeout time.Duration) {
 	a.mu.Lock()
@@ -583,7 +630,7 @@ func (a *App) startAutoLockWithTimeout(timeout time.Duration) {
 		return
 	}
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(autoLockTick)
 		defer ticker.Stop()
 		for {
 			select {
@@ -591,7 +638,7 @@ func (a *App) startAutoLockWithTimeout(timeout time.Duration) {
 				return
 			case <-ticker.C:
 				a.mu.Lock()
-				expired := a.unlocked && time.Since(a.lastActivity) > timeout
+				expired := a.keyMaterialResidentLocked() && time.Since(a.lastActivity) > timeout
 				a.mu.Unlock()
 				if expired {
 					a.Lock()
@@ -1215,14 +1262,24 @@ func (a *App) SetGitAuthor(name, email string) error {
 }
 
 // SetAutoLock persists the idle auto-lock timeout in minutes (0 disables it).
+// When a timeout is armed while key material is already resident (e.g. raising
+// it from 0), the idle timer is started too, otherwise that material would
+// have nothing bounding its lifetime.
 func (a *App) SetAutoLock(minutes int) error {
 	if minutes < 0 {
 		return errors.New("auto-lock cannot be negative")
 	}
 	a.mu.Lock()
 	a.cfg.AutoLockMinutes = minutes
+	resident := a.keyMaterialResidentLocked()
 	a.mu.Unlock()
-	return a.saveConfig()
+	if err := a.saveConfig(); err != nil {
+		return err
+	}
+	if resident {
+		a.startAutoLock()
+	}
+	return nil
 }
 
 // SetClipboardClear persists how long copied secrets stay on the clipboard.
