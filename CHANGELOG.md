@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The GUI webview now ships a `Content-Security-Policy` in
+  `cmd/gui/frontend/index.html`. Wails v2 has no CSP option of its own, so that
+  meta tag is the only renderer-side policy the app can have. The webview is
+  bound to the full Go bridge (`ShowPassword`, `ImportPGPKeyFile`,
+  `ImportSSHKeyFile`, `OpenLocalStore`, `CloneStore`, `ChangeLockPassword`), so
+  any script that ran in the renderer would own the vault. The app has no HTML
+  injection sink today and stays that way, but the previous safety came from
+  the discipline of whoever wrote the component rather than from any control.
+
+### Added
+
+- `tools/checkui` grew the security half of its gate: `raw-html` (`{@html}`),
+  `html-sink` (`innerHTML`, `insertAdjacentHTML`, `document.write`, `eval(`,
+  `new Function(`), and `missing-csp`/`weak-csp` for the policy in
+  `index.html`. A line that has to name one of these without using it is
+  suppressed with `// checkui:allow`.
+
 ## [v0.1.2] - 2026-09-25
 
 ### Fixed

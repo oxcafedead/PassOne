@@ -3,6 +3,17 @@
 <head>
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <!-- Content-Security-Policy: the renderer of this app is bound to the full
+         Go bridge (ShowPassword, ImportPGPKeyFile, OpenLocalStore, CloneStore,
+         ChangeLockPassword), so any script that runs here owns the vault. This
+         policy is what makes a future HTML-injection mistake a broken panel
+         instead of total compromise. Wails v2 has no CSP option, so this meta
+         tag is the only place the policy can live; tools/checkui fails the
+         build if it disappears. style-src needs 'unsafe-inline' because Svelte
+         injects component styles at runtime; connect-src stays 'self' because
+         the vite dev server HMR socket is same-origin. Do not relax without
+         reading the CSP section of AGENTS.md. -->
+    <meta content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" http-equiv="Content-Security-Policy"/>
     <title>PassOne</title>
 </head>
 <body>

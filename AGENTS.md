@@ -28,7 +28,7 @@ Windows password manager (`passone`) backed by a self-contained OpenPGP store. I
 | `internal/cliputil` | Clipboard write + auto-clear |
 | `internal/version` | Single release-version source; injected via `-ldflags` at build time |
 | `tools/checkicon` | CI gate: asserts the GUI exe embeds an icon resource |
-| `tools/checkui` | CI gate: asserts no Svelte component has dead interactivity |
+| `tools/checkui` | CI gate: asserts no Svelte component has dead interactivity and no renderer escape hatch (`{@html}`, `innerHTML`, missing CSP) |
 | `tools/coveragecheck` | CI gate: asserts the coverage profile clears a threshold |
 | `tests/interop` | PowerShell harness that validates against real GnuPG |
 
@@ -88,7 +88,8 @@ CI (`.github/workflows/ci.yml`) installs golangci-lint with `install-mode: goins
 - Requires GitHub secret `SONAR_TOKEN`; project metadata is in `sonar-project.properties`.
 - `tools/checkui` needs no dedicated CI step: its test lives in the `tools/checkui`
   package, so the ordinary `go test ./...` step runs it. It reads
-  `cmd/gui/frontend/src`, so it works before the frontend is built.
+  `cmd/gui/frontend/src` and `cmd/gui/frontend/index.html`, so it works before
+  the frontend is built.
 
 ### Dead-interactivity gate (`tools/checkui`)
 
@@ -104,6 +105,59 @@ enabled and is permanently inert — exactly how the Edit button shipped broken.
 
 Add a rule in `tools/checkui/main.go` and a case in `main_test.go` when you add
 a new interactive element class (checkbox, link, keydown-only control).
+
+### Renderer-escape-hatch gate (`tools/checkui`)
+
+The same tool also refuses the constructs that would defeat Svelte's escaping
+(the rationale is in the CSP section below):
+
+- `raw-html` — a `{@html ...}` tag.
+- `html-sink` — `innerHTML`/`outerHTML`, `insertAdjacentHTML`, `srcdoc`,
+  `document.write`, `eval(`, `new Function(`.
+- `missing-csp` / `weak-csp` — `index.html` has no CSP meta tag, or its policy
+  would not actually restrict scripts (no `default-src`, `*`,
+  `'unsafe-inline'`, `'unsafe-eval'`).
+
+`.svelte` and `.ts`/`.js` files under `src/` are both scanned. A line that must
+name a sink without using it (prose, a reviewed exception) is suppressed with
+`// checkui:allow` on that line; if you need the exception often enough for
+that to smell, the answer is `textContent`, not a suppression.
+
+### Content-Security-Policy (do not remove)
+
+`cmd/gui/frontend/index.html` carries
+`<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">`.
+Wails v2 has **no** CSP option (`pkg/options/options.go` and
+`pkg/options/assetserver/options.go` in v2.16.0 have no such field), so this
+meta tag is the entire renderer-side policy. `tools/checkui` fails the build
+(`missing-csp` / `weak-csp`) if it is deleted or weakened.
+
+Why it matters here specifically: the webview is not a read-only view. It is
+bound to the whole Go bridge — `ShowPassword`, `ImportPGPKeyFile`,
+`ImportSSHKeyFile`, `OpenLocalStore`, `CloneStore`, `ChangeLockPassword`. Any
+script that runs in the renderer can therefore read the vault, rewrite the lock
+password or pivot the store. The app is safe today because Svelte escapes every
+interpolation and secrets are rendered as text (`value={detail}` in a
+textarea), but that is a convention, not a control. CSP is the control: it is
+what turns a future `{@html}` mistake, an injected dependency or a hostile
+`.gpg` filename into a broken panel instead of total compromise.
+
+Notes for anyone touching the policy:
+
+- `style-src` needs `'unsafe-inline'`: Svelte injects component CSS as runtime
+  `<style>` elements. `script-src` does **not** — keep `'self'`; do not add
+  `'unsafe-eval'`, and never add `'unsafe-inline'` to `script-src`.
+- `connect-src 'self'` is enough for `npm run dev`: the vite HMR socket is
+  same-origin, and a `ws://` URL matches `'self'` for an `http://` page.
+- The CSP gates the document, not the Wails runtime scripts, which are injected
+  as same-origin `<script src>` by the asset server.
+- The asset server parses and re-renders `index.html` through
+  `golang.org/x/net/html` before it reaches the webview.
+  `TestCSPSurvivesWailsRender` in `tools/checkui` pins that the policy survives
+  that round trip.
+- Entry names and other vault data reach the DOM as text. If you ever need
+  dynamic markup, prefer building nodes with `textContent`/`createElement` over
+  `innerHTML`; both are refused by `tools/checkui`.
 
 Recommended local order before pushing:
 
