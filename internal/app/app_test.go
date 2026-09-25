@@ -26,6 +26,7 @@ import (
 	"github.com/oxcafedead/passone/internal/sshx"
 	"github.com/oxcafedead/passone/internal/store"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/windows"
 )
 
 const testPGPPassphrase = "app-test-pass"
@@ -249,6 +250,65 @@ func TestNoPassphraseImportUnlockDecryptFlow(t *testing.T) {
 	}
 }
 
+// reopenTestApp returns a second App bound to the same data directory, so a
+// test can assert what is actually on disk instead of what the first instance
+// kept in memory.
+func reopenTestApp(t *testing.T) *App {
+	t.Helper()
+	a, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return a
+}
+
+// denyDelete holds path open without FILE_SHARE_DELETE, which makes a
+// MoveFileEx replacing it fail with a sharing violation. It is how a commit
+// that fails half way through a re-key is reproduced. The returned function
+// releases the handle.
+func denyDelete(t *testing.T, path string) func() {
+	t.Helper()
+	return holdSharing(t, path, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, false)
+}
+
+// blockStagingWrite creates path and holds it without FILE_SHARE_WRITE, so a
+// staged write to it fails with a sharing violation. The returned function
+// releases the handle and removes the file again.
+func blockStagingWrite(t *testing.T, path string) func() {
+	t.Helper()
+	return holdSharing(t, path, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ, true)
+}
+
+func holdSharing(t *testing.T, path string, access, share uint32, remove bool) func() {
+	t.Helper()
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(p, access, share, nil, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatalf("CreateFile(%s): %v", path, err)
+	}
+	return func() {
+		_ = windows.CloseHandle(h)
+		if remove {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+// assertNoStagingFiles fails if a re-key left staging files behind.
+func assertNoStagingFiles(t *testing.T, dir string) {
+	t.Helper()
+	names, err := filepath.Glob(filepath.Join(dir, "*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("staging files left behind: %v", names)
+	}
+}
+
 func TestChangeLockPassword(t *testing.T) {
 	a := newTestApp(t)
 	armored := armoredTestKey(t)
@@ -258,6 +318,9 @@ func TestChangeLockPassword(t *testing.T) {
 	}
 	if len(infos) == 0 {
 		t.Fatal("no keys imported")
+	}
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
 	}
 
 	if err := a.ChangeLockPassword([]byte(testLockPass), nil); err == nil {
@@ -276,6 +339,7 @@ func TestChangeLockPassword(t *testing.T) {
 	if err := a.ChangeLockPassword([]byte(testLockPass), []byte("new-lock-pass")); err != nil {
 		t.Fatalf("ChangeLockPassword: %v", err)
 	}
+	assertNoStagingFiles(t, a.paths.KeysDir)
 
 	a.Lock()
 	if err := a.Unlock([]byte(testLockPass)); err == nil {
@@ -283,6 +347,97 @@ func TestChangeLockPassword(t *testing.T) {
 	}
 	if err := a.Unlock([]byte("new-lock-pass")); err != nil {
 		t.Fatalf("Unlock with new password: %v", err)
+	}
+	// Both blobs must have moved to the new key, not just the OpenPGP one.
+	if a.SSHKeyID() == "" {
+		t.Fatal("SSH key id should survive the lock password change")
+	}
+}
+
+// A re-key that cannot be completed must leave the whole vault under the old
+// password. Publishing the OpenPGP blob and then failing on the SSH one is the
+// case that used to brick the vault: neither password would open everything.
+func TestChangeLockPasswordRollsBackWhenACommitFails(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
+	// The SSH blob is committed last, so blocking its move fails the
+	// transaction only after the OpenPGP blob has been published.
+	release := denyDelete(t, a.paths.SSHKeyFile)
+	err := a.ChangeLockPassword([]byte(testLockPass), []byte("new-lock-pass"))
+	release()
+	if err == nil {
+		t.Fatal("expected the change to fail when a staged move cannot be published")
+	}
+	if !strings.Contains(err.Error(), "SSH") {
+		t.Fatalf("error should name the blob that failed: %v", err)
+	}
+	if !a.IsUnlocked() {
+		t.Fatal("a failed change must leave the session unlocked under the old key")
+	}
+
+	// A fresh App reads what is on disk: the old password still opens the
+	// vault and the new one does not.
+	b := reopenTestApp(t)
+	if err := b.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("old lock password should still open the vault after a failed change: %v", err)
+	}
+	b.Lock()
+	if err := b.Unlock([]byte("new-lock-pass")); err == nil {
+		t.Fatal("the new lock password must not open a vault whose change failed")
+	}
+	assertNoStagingFiles(t, a.paths.KeysDir)
+
+	// The rolled-back vault is intact, so the change can simply be retried.
+	if err := a.ChangeLockPassword([]byte(testLockPass), []byte("new-lock-pass")); err != nil {
+		t.Fatalf("retry after rollback: %v", err)
+	}
+	assertNoStagingFiles(t, a.paths.KeysDir)
+	a.Lock()
+	if err := a.Unlock([]byte("new-lock-pass")); err != nil {
+		t.Fatalf("Unlock with the retried password: %v", err)
+	}
+}
+
+// A failure while staging must not touch any blob, including the one already
+// loaded into memory for staging.
+func TestChangeLockPasswordStageFailureLeavesEveryBlobAlone(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
+	// Block the staging write of the SSH blob, which is prepared after the
+	// OpenPGP replacement, so the change fails with nothing published.
+	release := blockStagingWrite(t, a.paths.SSHKeyFile+".tmp")
+	err := a.ChangeLockPassword([]byte(testLockPass), []byte("new-lock-pass"))
+	release()
+	if err == nil {
+		t.Fatal("expected the change to fail when a blob cannot be staged")
+	}
+	assertNoStagingFiles(t, a.paths.KeysDir)
+
+	b := reopenTestApp(t)
+	if err := b.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("old lock password should still open the vault: %v", err)
+	}
+	b.Lock()
+	if err := b.Unlock([]byte("new-lock-pass")); err == nil {
+		t.Fatal("the new lock password must not open the vault")
 	}
 }
 

@@ -1298,7 +1298,8 @@ func (a *App) SetClipboardClear(seconds int) error {
 // under a key derived from newPassword. It must be called while unlocked. The
 // current password is checked against the in-memory key_disk; a mismatch is
 // rejected. On success the in-memory key is replaced with the one derived from
-// newPassword, keeping this session unlocked.
+// newPassword, keeping this session unlocked. The re-seal is transactional:
+// if it cannot be completed the vault is left sealed under the old password.
 func (a *App) ChangeLockPassword(oldPassword, newPassword []byte) error {
 	if len(newPassword) == 0 {
 		return errors.New("a non-empty lock password is required")
@@ -1324,6 +1325,35 @@ func (a *App) ChangeLockPassword(oldPassword, newPassword []byte) error {
 	}
 	defer security.Zero(newKey)
 
+	if err := a.resealKeyBlobsLocked(oldKey, newKey); err != nil {
+		return err
+	}
+
+	security.Zero(a.keyDisk)
+	a.keyDisk = append(a.keyDisk[:0], newKey...)
+	return nil
+}
+
+// keyBlob is one sealed key file taking part in a re-key transaction. The
+// plaintext it was opened from is retained for the whole transaction so a
+// published blob can be put back if a later one cannot be written.
+type keyBlob struct {
+	name      string
+	path      string
+	plaintext []byte
+	staged    *security.StagedSeal
+}
+
+// resealKeyBlobsLocked re-seals every stored key blob from oldKey to newKey as
+// a single transaction. Each blob is decrypted and its replacement staged
+// before anything on disk changes; the staged files are then moved into place
+// back to back, so no error path can leave the OpenPGP blob under one password
+// and the SSH blob under the other. A failure while loading or staging touches
+// nothing. A failure during the moves rewrites the blobs that were already
+// published from the retained plaintext, leaving the vault openable with
+// oldKey. Callers must hold a.mu.
+func (a *App) resealKeyBlobsLocked(oldKey, newKey []byte) error {
+	var blobs []keyBlob
 	for _, f := range []struct{ name, path string }{
 		{"OpenPGP", a.paths.PGPKeyFile},
 		{"SSH", a.paths.SSHKeyFile},
@@ -1331,20 +1361,64 @@ func (a *App) ChangeLockPassword(oldPassword, newPassword []byte) error {
 		if !fileExists(f.path) {
 			continue
 		}
-		payload, err := a.vault.LoadSealed(a.keyDisk, f.path)
+		payload, err := a.vault.LoadSealed(oldKey, f.path)
 		if err != nil {
+			wipeKeyBlobs(blobs)
 			return fmt.Errorf("unable to re-seal the stored %s key: %w", f.name, err)
 		}
-		err = a.vault.Store(newKey, f.path, payload)
-		security.Zero(payload)
+		staged, err := a.vault.Stage(newKey, f.path, payload)
 		if err != nil {
+			security.Zero(payload)
+			wipeKeyBlobs(blobs)
 			return fmt.Errorf("unable to re-seal the stored %s key: %w", f.name, err)
 		}
+		blobs = append(blobs, keyBlob{name: f.name, path: f.path, plaintext: payload, staged: staged})
 	}
 
-	security.Zero(a.keyDisk)
-	a.keyDisk = append(a.keyDisk[:0], newKey...)
+	published := 0
+	for i := range blobs {
+		err := blobs[i].staged.Commit()
+		if err == nil {
+			published++
+			continue
+		}
+		err = fmt.Errorf("unable to re-seal the stored %s key: %w", blobs[i].name, err)
+		err = a.rollbackKeyBlobsLocked(oldKey, blobs[:published], err)
+		wipeKeyBlobs(blobs)
+		return err
+	}
+	wipeKeyBlobs(blobs)
 	return nil
+}
+
+// rollbackKeyBlobsLocked restores the blobs that were already published back
+// under oldKey and reports what the user is left with. A blob that cannot be
+// restored is named, because that is the only outcome that needs their
+// attention; otherwise the change is undone and the old password still works.
+func (a *App) rollbackKeyBlobsLocked(oldKey []byte, published []keyBlob, cause error) error {
+	if len(published) == 0 {
+		return cause
+	}
+	var unrestored []string
+	for i := range published {
+		if err := a.vault.Store(oldKey, published[i].path, published[i].plaintext); err != nil {
+			unrestored = append(unrestored, published[i].name)
+		}
+	}
+	if len(unrestored) > 0 {
+		return fmt.Errorf("%w; the %s key could not be restored, so the vault now mixes both lock passwords and must be repaired from a backup",
+			cause, strings.Join(unrestored, " and "))
+	}
+	return fmt.Errorf("%w; the change was undone, so the current lock password still opens the vault", cause)
+}
+
+// wipeKeyBlobs drops the staged replacements and zeroes the retained
+// plaintexts of a re-key transaction, committed blobs included.
+func wipeKeyBlobs(blobs []keyBlob) {
+	for i := range blobs {
+		blobs[i].staged.Discard()
+		security.Zero(blobs[i].plaintext)
+	}
 }
 
 // CloneHostport extracts the host:22 hostport for a git SSH URL so the host

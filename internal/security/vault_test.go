@@ -200,6 +200,142 @@ func TestVaultLoadSealedMissingFile(t *testing.T) {
 	}
 }
 
+func TestStageDoesNotTouchDestination(t *testing.T) {
+	dir := t.TempDir()
+	paths := config.PathsFromBase(dir)
+	v, _ := OpenVault(paths)
+	salt, _ := v.LoadOrCreateSalt()
+	defer Zero(salt)
+	key := DeriveKey([]byte("master"), salt)
+	defer Zero(key)
+
+	file := filepath.Join(paths.KeysDir, "pgp.dat")
+	if err := v.Store(key, file, []byte("old-blob")); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	staged, err := v.Stage(key, file, []byte("new-blob"))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	got, err := v.LoadSealed(key, file)
+	if err != nil {
+		t.Fatalf("LoadSealed after Stage: %v", err)
+	}
+	if string(got) != "old-blob" {
+		t.Fatalf("destination changed before Commit: %q", got)
+	}
+	if _, err := os.Stat(file + ".tmp"); err != nil {
+		t.Fatalf("staging file should exist: %v", err)
+	}
+
+	if err := staged.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	got, err = v.LoadSealed(key, file)
+	if err != nil {
+		t.Fatalf("LoadSealed after Commit: %v", err)
+	}
+	if string(got) != "new-blob" {
+		t.Fatalf("after Commit = %q", got)
+	}
+	if _, err := os.Stat(file + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("staging file should be gone after Commit")
+	}
+}
+
+func TestStageDiscardKeepsDestination(t *testing.T) {
+	paths := config.PathsFromBase(t.TempDir())
+	v, _ := OpenVault(paths)
+	salt, _ := v.LoadOrCreateSalt()
+	defer Zero(salt)
+	key := DeriveKey([]byte("master"), salt)
+	defer Zero(key)
+
+	file := filepath.Join(paths.KeysDir, "pgp.dat")
+	if err := v.Store(key, file, []byte("old-blob")); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	staged, err := v.Stage(key, file, []byte("new-blob"))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	staged.Discard()
+
+	got, err := v.LoadSealed(key, file)
+	if err != nil {
+		t.Fatalf("LoadSealed after Discard: %v", err)
+	}
+	if string(got) != "old-blob" {
+		t.Fatalf("Discard changed the destination: %q", got)
+	}
+	if _, err := os.Stat(file + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("staging file should be gone after Discard")
+	}
+	// Discard after a successful Commit must not delete the published blob.
+	restaged, err := v.Stage(key, file, []byte("second-blob"))
+	if err != nil {
+		t.Fatalf("Stage again: %v", err)
+	}
+	if err := restaged.Commit(); err != nil {
+		t.Fatalf("Commit again: %v", err)
+	}
+	restaged.Discard()
+	got, err = v.LoadSealed(key, file)
+	if err != nil {
+		t.Fatalf("LoadSealed after Commit+Discard: %v", err)
+	}
+	if string(got) != "second-blob" {
+		t.Fatalf("Discard after Commit removed the blob: %q", got)
+	}
+}
+
+func TestStageCommitFailureKeepsDestination(t *testing.T) {
+	paths := config.PathsFromBase(t.TempDir())
+	v, _ := OpenVault(paths)
+	salt, _ := v.LoadOrCreateSalt()
+	defer Zero(salt)
+	key := DeriveKey([]byte("master"), salt)
+	defer Zero(key)
+
+	base := t.TempDir()
+	dst := filepath.Join(base, "dst")
+	if err := os.Mkdir(dst, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := v.Stage(key, dst, []byte("blob"))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if err := staged.Commit(); err == nil {
+		t.Fatal("expected Commit onto a directory to fail")
+	}
+	if fi, err := os.Stat(dst); err != nil || !fi.IsDir() {
+		t.Fatal("a failed Commit must leave the destination alone")
+	}
+}
+
+func TestStagedSealDoubleCommitFails(t *testing.T) {
+	paths := config.PathsFromBase(t.TempDir())
+	v, _ := OpenVault(paths)
+	salt, _ := v.LoadOrCreateSalt()
+	defer Zero(salt)
+	key := DeriveKey([]byte("master"), salt)
+	defer Zero(key)
+
+	file := filepath.Join(paths.KeysDir, "pgp.dat")
+	staged, err := v.Stage(key, file, []byte("blob"))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if err := staged.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := staged.Commit(); err == nil {
+		t.Fatal("expected the second Commit to fail")
+	}
+}
+
 func TestVaultSaltPersists(t *testing.T) {
 	paths := config.PathsFromBase(t.TempDir())
 	v1, _ := OpenVault(paths)

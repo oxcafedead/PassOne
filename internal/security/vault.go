@@ -134,27 +134,70 @@ func (v *Vault) LoadSealed(key []byte, path string) ([]byte, error) {
 	return v.Open(key, sealed)
 }
 
-// Store seals plaintext with key_disk and writes it atomically to path with
-// restrictive permissions.
-func (v *Vault) Store(key []byte, path string, plaintext []byte) error {
+// StagedSeal is a sealed blob written to a staging file next to its final
+// path, not yet visible there. Re-keying several blobs at once needs every one
+// of them prepared before any of them replaces what is already on disk: a
+// failure half way through would otherwise leave some blobs under the old key
+// and some under the new one, and no single password would open the vault.
+type StagedSeal struct {
+	path      string
+	tmp       string
+	committed bool
+}
+
+// Stage seals plaintext with key and writes it to a staging file, leaving path
+// untouched until Commit. The plaintext is not retained and must be wiped by
+// the caller. The returned StagedSeal must be committed or discarded.
+func (v *Vault) Stage(key []byte, path string, plaintext []byte) (*StagedSeal, error) {
 	sealed, err := v.Seal(key, plaintext)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer Zero(sealed)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	s := &StagedSeal{path: path, tmp: path + ".tmp"}
+	if err := os.WriteFile(s.tmp, sealed, 0o600); err != nil {
+		return nil, err
+	}
+	_ = config.RestrictACL(s.tmp)
+	return s, nil
+}
+
+// Commit publishes the staged blob onto its path, replacing whatever was there.
+// If it fails, path still holds its previous contents and the staging file is
+// still there to be discarded.
+func (s *StagedSeal) Commit() error {
+	if s.committed {
+		return errors.New("staged seal has already been committed")
+	}
+	if err := atomicMove(s.tmp, s.path); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, sealed, 0o600); err != nil {
-		return err
-	}
-	_ = config.RestrictACL(tmp)
-	if err := atomicMove(tmp, path); err != nil {
-		return err
-	}
-	_ = config.RestrictACL(path)
+	_ = config.RestrictACL(s.path)
+	s.committed = true
 	return nil
+}
+
+// Discard drops the staged blob, leaving path untouched. It is a no-op once
+// the blob has been committed, and a failure to delete the staging file is
+// ignored: that file only ever holds sealed material.
+func (s *StagedSeal) Discard() {
+	if s.committed {
+		return
+	}
+	_ = os.Remove(s.tmp)
+}
+
+// Store seals plaintext with key_disk and writes it atomically to path with
+// restrictive permissions.
+func (v *Vault) Store(key []byte, path string, plaintext []byte) error {
+	s, err := v.Stage(key, path, plaintext)
+	if err != nil {
+		return err
+	}
+	return s.Commit()
 }
 
 // StoreSalt persists the vault salt at a given path with restrictive
