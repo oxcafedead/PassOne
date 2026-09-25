@@ -27,6 +27,9 @@ Windows password manager (`passone`) backed by a self-contained OpenPGP store. I
 | `internal/config` | Config persistence, ACLs, paths |
 | `internal/cliputil` | Clipboard write + auto-clear |
 | `internal/version` | Single release-version source; injected via `-ldflags` at build time |
+| `tools/checkicon` | CI gate: asserts the GUI exe embeds an icon resource |
+| `tools/checkui` | CI gate: asserts no Svelte component has dead interactivity |
+| `tools/coveragecheck` | CI gate: asserts the coverage profile clears a threshold |
 | `tests/interop` | PowerShell harness that validates against real GnuPG |
 
 ## Everyday commands
@@ -83,6 +86,24 @@ CI (`.github/workflows/ci.yml`) installs golangci-lint with `install-mode: goins
 - Runs on `windows-latest` (the app is Windows-specific: systray, clipboard, registry, DPAPI).
 - Steps: checkout with full history → setup Go → setup Node → `npm ci && npm run build` → `go test` with coverage → Wails GUI build + `tools/checkicon` icon assertion → `golangci-lint` → SonarQube scan.
 - Requires GitHub secret `SONAR_TOKEN`; project metadata is in `sonar-project.properties`.
+- `tools/checkui` needs no dedicated CI step: its test lives in the `tools/checkui`
+  package, so the ordinary `go test ./...` step runs it. It reads
+  `cmd/gui/frontend/src`, so it works before the frontend is built.
+
+### Dead-interactivity gate (`tools/checkui`)
+
+`cmd/gui/frontend/src/App.svelte` is the whole UI, and Svelte raises no error
+for a `<button>` that has no `on:click`. Such a button compiles, renders, looks
+enabled and is permanently inert — exactly how the Edit button shipped broken.
+`tools/checkui` fails the build on two rules:
+
+- `button-no-handler` — a `<button>` with no click handler and no
+  `type="submit"`.
+- `orphan-handler` — a `function` declared in `<script>` that nothing else in
+  the component references, so it can never be called.
+
+Add a rule in `tools/checkui/main.go` and a case in `main_test.go` when you add
+a new interactive element class (checkbox, link, keydown-only control).
 
 Recommended local order before pushing:
 
@@ -118,5 +139,10 @@ Recommended local order before pushing:
 - Do NOT pass `-nopackage` to `wails build`. Wails only generates the `-res.syso` (which embeds `build/windows/icon.ico`, the application manifest and version info) when `options.Pack` is true; with `-nopackage` the exe is produced silently without any icon resource, so Explorer/taskbar show a generic icon. The `-nopackage` flag only matters for non-Windows packaging and is never needed here.
 - The project targets Go 1.26 in `go.mod`, but `.golangci.yml` sets `run.go: '1.25'` so the linter can actually start. Do not change this unless the linter version is also updated.
 - Exported identifiers must have doc comments (`revive` `exported` rule).
+- `npm run check` (svelte-check) currently reports 4 pre-existing type errors
+  and is not part of CI. Fix them before wiring it in, otherwise it is not a
+  usable gate.
 - Windows-only code uses `golang.org/x/sys/windows`, `syscall` lazy DLLs, and DPAPI. Cross-platform refactors need careful review.
+- `tests/interop/run.ps1` is a manual integration harness that requires a built
+  `passone.exe` and a real GnuPG installation. It is not part of `go test ./...`.
 - `tests/interop/run.ps1` is a manual integration harness that requires a built `passone.exe` and a real GnuPG installation. It is not part of `go test ./...`.

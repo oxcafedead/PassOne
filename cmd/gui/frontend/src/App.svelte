@@ -1229,6 +1229,7 @@ let lockPass: string = ''
             </button>
           {/if}
           <button
+            on:click={openEdit}
             title="Edit this entry"
             class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
           >

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.1.2] - 2026-09-25
+
+### Fixed
+
+- The **Edit** button in the GUI was inert: the Edit entry action rendered and
+  looked enabled but was never bound to its `openEdit` handler, so clicking it
+  did nothing and entries could not be modified from the UI. The handler was
+  dropped from the markup in an unrelated CLI commit.
+
+### Added
+
+- `tools/checkui`, a build gate that fails `go test ./...` when a Svelte
+  component contains dead interactivity: a `<button>` with no click handler and
+  no `type="submit"`, or a handler function that nothing references. Both
+  mistakes compile cleanly and produce no Svelte warning, which is how the Edit
+  button shipped broken in the first place.
+
 ## [v0.1.1] - 2026-09-24
 
 ### Fixed
