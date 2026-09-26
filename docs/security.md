@@ -44,11 +44,39 @@ old key and re-sealing the new files). These windows are minimized and the
 buffers zeroed via `internal/security.Zero`, but the material is present in memory
 for that interval.
 
+### 4. Zeroing cannot be made total in Go
+
+Locking overwrites what it can reach: passphrases and plaintext buffers with
+`internal/security.Zero`, and parsed private keys with
+`internal/security.WipeKey` (the SSH key behind the `ssh.Signer` and every
+OpenPGP primary key and subkey). What it cannot reach stays readable to anything
+that can read the process's memory while the vault is locked:
+
+- Go's garbage collector **reclaims but never erases**. Any buffer a crypto
+  library allocated on the way in — decrypted DER, CFB output, `big.Int`
+  temporaries — may still hold key material until the collector happens to reuse
+  those pages. `Lock` deliberately calls `runtime.GC` to shorten that window, but
+  a GC buys no confidentiality of its own.
+- Key material inside a crypto library is only overwritable where it is stored
+  in exported fields. `WipeKey` covers every such field for the key types this
+  project can import; a type with unexported secret state is reported as
+  unrecognized rather than silently claimed as wiped.
+- Copies made by the runtime, by the compiler, or by anything that had already
+  read the key are out of reach. So is a full core dump, a hibernation file, or a
+  swap file that captured the unlocked process.
+
+Treat "locked" as *no longer reachable through passone*, not as *erased*. An
+attacker with read access to the process's address space at the moment of
+locking, or with a memory image captured while the vault was unlocked, is
+outside the boundary this design claims.
+
 ## Design principles
 
 - **No persistent secret keys on disk.** Keys are derived from the passphrase and
   live only in memory.
-- **Zeroing everywhere.** Decrypted secrets and temp buffers are overwritten via
-  `internal/security.Zero` as soon as they are no longer needed.
+- **Zeroing everywhere we can reach.** Decrypted secrets, temp buffers and parsed
+  private keys are overwritten via `internal/security.Zero` and
+  `internal/security.WipeKey` as soon as they are no longer needed. Section 4
+  states what that leaves behind.
 - **Isolation of the key-owning layer.** The code that holds secrets is kept thin
   and isolated to minimize attack surface.

@@ -2,8 +2,10 @@ package pgp
 
 import (
 	"bytes"
+	"crypto/rsa"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -206,6 +208,74 @@ func TestLockDropsKeyMaterial(t *testing.T) {
 	if _, err := svc.Decrypt(ciphertext); err == nil {
 		t.Fatal("expected Decrypt to fail after Lock")
 	}
+}
+
+// TestLockWipesDecryptedKeyMaterial pins that Lock erases the parsed private
+// keys rather than only dereferencing them. The aliases are taken before Lock
+// and survive it, so they observe the state of the heap after the session ends.
+func TestLockWipesDecryptedKeyMaterial(t *testing.T) {
+	svc := &Service{}
+	if _, err := svc.ImportSecret(armorSecret(t, newTestEntity(t)), []byte("test-pass")); err != nil {
+		t.Fatalf("ImportSecret: %v", err)
+	}
+	entity := svc.entities[0]
+	keys := entityRSAKeys(t, entity)
+	if len(keys) < 2 {
+		t.Fatalf("expected a primary key and an encryption subkey, got %d", len(keys))
+	}
+
+	svc.Lock()
+
+	for i, k := range keys {
+		if k.D.Sign() != 0 {
+			t.Fatalf("key %d: private exponent survived Lock: %v", i, k.D)
+		}
+		for j, p := range k.Primes {
+			if p == nil || p.Sign() != 0 {
+				t.Fatalf("key %d: prime %d survived Lock: %v", i, j, p)
+			}
+		}
+		if k.Precomputed.Dp.Sign() != 0 {
+			t.Fatalf("key %d: precomputed Dp survived Lock: %v", i, k.Precomputed.Dp)
+		}
+		// N is public: it is the key's identity, not its secret.
+		if k.N.Sign() == 0 {
+			t.Fatalf("key %d: Lock wiped the public modulus", i)
+		}
+	}
+	// A stale reference must find an empty packet rather than a usable key.
+	if entity.PrivateKey.PrivateKey != nil {
+		t.Fatal("Lock must detach the parsed key from the primary key packet")
+	}
+	for i := range entity.Subkeys {
+		if entity.Subkeys[i].PrivateKey.PrivateKey != nil {
+			t.Fatalf("Lock must detach the parsed key from subkey %d", i)
+		}
+	}
+}
+
+// entityRSAKeys returns the parsed RSA key of the primary key and of every
+// subkey. openpgp.NewEntity defaults to RSA, which is what makes the wipe
+// observable: the secrets are big.Ints, not byte slices.
+func entityRSAKeys(t *testing.T, e *openpgp.Entity) []*rsa.PrivateKey {
+	t.Helper()
+	var out []*rsa.PrivateKey
+	add := func(name string, priv *packet.PrivateKey) {
+		t.Helper()
+		if priv == nil {
+			t.Fatalf("%s: no private key packet", name)
+		}
+		k, ok := priv.PrivateKey.(*rsa.PrivateKey)
+		if !ok {
+			t.Fatalf("%s: expected *rsa.PrivateKey, got %T", name, priv.PrivateKey)
+		}
+		out = append(out, k)
+	}
+	add("primary", e.PrivateKey)
+	for i := range e.Subkeys {
+		add(fmt.Sprintf("subkey %d", i), e.Subkeys[i].PrivateKey)
+	}
+	return out
 }
 
 func TestDoubleUnlockFailsCleanly(t *testing.T) {

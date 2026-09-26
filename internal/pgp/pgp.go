@@ -201,15 +201,49 @@ func (s *Service) setPassphrase(passphrase []byte) {
 	copy(s.passphrase, passphrase)
 }
 
-// Lock drops all in-memory key material and passphrases (best effort).
+// Lock drops all in-memory key material and passphrases. The decrypted private
+// key packets are overwritten via security.WipeKey before the entities are
+// dereferenced: a *packet.PrivateKey owns a tree of typed key structs, and
+// dropping the last reference only makes the collector reclaim it eventually
+// without ever erasing the scalars. See security.WipeKey for what survives that
+// anyway.
 func (s *Service) Lock() {
 	if s.passphrase != nil {
 		security.Zero(s.passphrase)
 	}
 	s.passphrase = nil
+	wipeEntities(s.entities)
 	s.entities = nil
-	// Best effort: prompt the collector to reclaim decrypted key memory.
+	// Best effort: prompt the collector to reclaim the entity structures that
+	// are now empty shells. This reclaims, it does not erase.
 	runtime.GC()
+}
+
+// wipeEntities overwrites the decrypted key material of every primary key and
+// subkey in the list, then detaches it from the packets.
+func wipeEntities(entities []*openpgp.Entity) {
+	for _, e := range entities {
+		if e == nil {
+			continue
+		}
+		wipePacketKey(e.PrivateKey)
+		for i := range e.Subkeys {
+			wipePacketKey(e.Subkeys[i].PrivateKey)
+		}
+	}
+}
+
+// wipePacketKey wipes one secret key packet and detaches the parsed key from
+// it. Encrypted is deliberately left untouched: DecryptPrivateKeys skips a
+// packet that is not marked encrypted, whereas flipping it would send a stale
+// reference down the s2k path, where decrypt has already cleared the s2k
+// parameters and closure.
+func wipePacketKey(priv *packet.PrivateKey) {
+	if priv == nil {
+		return
+	}
+	security.WipeKey(priv.PrivateKey)
+	priv.PrivateKey = nil
 }
 
 var errLocked = errors.New("the application is locked; run unlock first")

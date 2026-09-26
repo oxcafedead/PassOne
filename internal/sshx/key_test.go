@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/pem"
 	"errors"
 	"strings"
@@ -71,6 +72,97 @@ func TestImportRejectsUnsupportedType(t *testing.T) {
 func TestImportGarbage(t *testing.T) {
 	if _, err := ImportPrivateKey([]byte("not a key"), nil); err == nil {
 		t.Fatal("expected garbage to be rejected")
+	}
+}
+
+// TestLockWipesEd25519KeyMaterial pins that Lock erases the private key the
+// signer wraps. The alias is taken before Lock and outlives it, so it observes
+// the state of the heap after the session ends.
+func TestLockWipesEd25519KeyMaterial(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := ImportPrivateKey(marshalTestKey(t, priv), nil)
+	if err != nil {
+		t.Fatalf("ImportPrivateKey: %v", err)
+	}
+	raw, ok := k.raw.(*ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ed25519.PrivateKey, got %T", k.raw)
+	}
+	before := bytes.Clone(*raw)
+	if bytes.Equal(before, bytes.Repeat([]byte{0}, len(before))) {
+		t.Fatal("test setup: key is already zeroed")
+	}
+
+	k.Lock()
+
+	if bytes.Equal(*raw, before) {
+		t.Fatalf("the private key survived Lock: %x", *raw)
+	}
+	if k.raw != nil {
+		t.Fatal("Lock must drop the reference to the parsed key")
+	}
+	if k.Signer() != nil {
+		t.Fatal("expected signer to be nil after Lock")
+	}
+	// The public half is not secret and must survive for the audit trail.
+	if !ed25519PublicKeyEqual(k, pub) {
+		t.Fatal("Lock must not damage the public key")
+	}
+}
+
+func TestLockWipesRSAKeyMaterial(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := ImportPrivateKey(marshalTestKey(t, priv), nil)
+	if err != nil {
+		t.Fatalf("ImportPrivateKey: %v", err)
+	}
+	raw, ok := k.raw.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", k.raw)
+	}
+	// The OpenSSH parser calls Precompute, so these hold a second copy of the
+	// exponents and have to be wiped too.
+	if raw.Precomputed.Dp == nil {
+		t.Fatal("test setup: Precompute did not run")
+	}
+
+	k.Lock()
+
+	if raw.D.Sign() != 0 {
+		t.Fatalf("the private exponent survived Lock: %v", raw.D)
+	}
+	for i, p := range raw.Primes {
+		if p == nil || p.Sign() != 0 {
+			t.Fatalf("prime %d survived Lock: %v", i, p)
+		}
+	}
+	if raw.Precomputed.Dp.Sign() != 0 {
+		t.Fatalf("precomputed Dp survived Lock: %v", raw.Precomputed.Dp)
+	}
+	if raw.N.Cmp(priv.N) != 0 {
+		t.Fatal("Lock must not damage the public modulus")
+	}
+}
+
+func TestLockIsIdempotent(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := ImportPrivateKey(marshalTestKey(t, priv), nil)
+	if err != nil {
+		t.Fatalf("ImportPrivateKey: %v", err)
+	}
+	k.Lock()
+	k.Lock()
+	if k.raw != nil || k.Signer() != nil {
+		t.Fatal("a second Lock must be a no-op")
 	}
 }
 

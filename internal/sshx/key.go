@@ -11,6 +11,7 @@ import (
 // SSHKey holds an imported SSH identity in memory while unlocked.
 type SSHKey struct {
 	signer     ssh.Signer
+	raw        any    // parsed private key behind signer; zeroed by Lock
 	passphrase []byte // preserved while unlocked; zeroed by Lock
 	public     []byte // authorized_keys line (non-secret)
 	algorithm  string
@@ -23,29 +24,39 @@ var ErrUnsupportedKey = errors.New("unsupported SSH key type: only Ed25519 and R
 // format), validating the passphrase when the key is encrypted. Unsupported
 // key types are rejected for v1.
 func ImportPrivateKey(pemBytes []byte, passphrase []byte) (*SSHKey, error) {
-	var signer ssh.Signer
-	var err error
-	signer, err = ssh.ParsePrivateKey(pemBytes)
+	// Parse the raw key rather than calling ssh.ParsePrivateKey: the ssh.Signer
+	// interface hides the key it wraps and offers no accessor, so a key parsed
+	// that way could only ever be dereferenced, never wiped. The signer built
+	// below wraps this very object, so keeping raw is enough.
+	raw, err := ssh.ParseRawPrivateKey(pemBytes)
 	if err != nil {
 		var missing *ssh.PassphraseMissingError
 		if errors.As(err, &missing) {
 			if passphrase == nil {
 				return nil, errors.New("the SSH key is passphrase-protected; a passphrase is required")
 			}
-			signer, err = ssh.ParsePrivateKeyWithPassphrase(pemBytes, passphrase)
+			raw, err = ssh.ParseRawPrivateKeyWithPassphrase(pemBytes, passphrase)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("unable to parse the SSH private key: %v", err)
 		}
 	}
 
+	signer, err := ssh.NewSignerFromKey(raw)
+	if err != nil {
+		security.WipeKey(raw)
+		return nil, fmt.Errorf("unable to parse the SSH private key: %v", err)
+	}
+
 	algo := signer.PublicKey().Type()
 	if algo != ssh.KeyAlgoED25519 && algo != ssh.KeyAlgoRSA {
+		security.WipeKey(raw)
 		return nil, ErrUnsupportedKey
 	}
 
 	k := &SSHKey{
 		signer:    signer,
+		raw:       raw,
 		algorithm: algo,
 		public:    append([]byte(nil), ssh.MarshalAuthorizedKey(signer.PublicKey())...),
 	}
@@ -77,12 +88,17 @@ func (k *SSHKey) setPassphrase(passphrase []byte) {
 	copy(k.passphrase, passphrase)
 }
 
-// Lock drops the passphrase and signer from memory (best effort).
+// Lock drops the passphrase and signer from memory. The private key behind the
+// signer is overwritten first: the ssh.Signer interface gives no way to reach
+// it, so raw is retained purely so it can be wiped. See security.WipeKey for
+// what survives that anyway.
 func (k *SSHKey) Lock() {
 	if k.passphrase != nil {
 		security.Zero(k.passphrase)
 	}
 	k.passphrase = nil
+	security.WipeKey(k.raw)
+	k.raw = nil
 	k.signer = nil
 }
 
