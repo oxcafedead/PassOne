@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Copied secrets can still reach Windows Clipboard History and the cloud
+  clipboard, which the auto-clear could never fix: both snapshot an item at
+  `SetClipboardData`, and there is no API to delete a snapshot. Every copy is now
+  published with `CanIncludeInClipboardHistory`,
+  `CanUploadToCloudClipboard` and
+  `ExcludeClipboardContentFromMonitorProcessing` (0/0/1), including the empty
+  item a clear leaves behind, and `cliputil.Copied` reports whether the marker
+  actually went on so the CLI and the GUI can say so instead of implying a
+  guarantee. The formats are the only lever and a Windows build may still ignore
+  them, which the UI now states in the copy badges and in Settings.
+- A clipboard clear that could not read the clipboard treated an unreadable
+  clipboard as "the user moved on" and left the secret in place. It now fails
+  closed: it wipes unconditionally and reports that it did, through the
+  `passone:clipboard-warning` event in the GUI and stderr in the CLI. Failures on
+  the timer have no caller left to return to, so they cannot travel back in
+  `Copied`'s result.
+
+### Added
+
+- `cliputil.HistoryEnabled` reads the four registry values that decide whether
+  this account has a Clipboard History and a cloud clipboard (absent or
+  unreadable counts as on, so the caveat errs towards warning). The GUI shows a
+  settings note with a pointer to the Windows toggle whenever it reports on.
+
 - The GUI trusted the wrong SSH host key. `TrustHost` opened a *second*
   connection to the host and stored the key that connection returned, while the
   fingerprint the user had confirmed came from the first one. An attacker who

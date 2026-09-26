@@ -107,6 +107,7 @@ func TestAppPassThroughMethods(t *testing.T) {
 		t.Fatal("expected HasTOTP without store to fail")
 	}
 	_ = a.ClipboardClearSeconds()
+	_ = a.ClipboardHistoryEnabled()
 	if a.UsernameSource() != "auto" {
 		t.Fatalf("UsernameSource = %q", a.UsernameSource())
 	}

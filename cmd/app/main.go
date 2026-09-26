@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/oxcafedead/passone/internal/cliputil"
 	"github.com/oxcafedead/passone/internal/version"
 )
 
@@ -49,6 +50,8 @@ Security notes:
   - Keys are stored locally sealed with AES-256-GCM; the sealing key is derived
     from the master passphrase (Argon2id) and never stored on disk.
   - 5-minute idle timeout (configurable in config.json) drops all key material.
+  - Copied secrets are marked so Windows keeps them out of Clipboard History and
+    the cloud clipboard, then removed from the clipboard after a timeout.
 `
 
 func main() {
@@ -64,6 +67,11 @@ func main() {
 	}
 
 	e := &env{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}
+	// A clipboard clear happens on a timer after the copy command returned, so
+	// its failures are reported here rather than through a return value.
+	cliputil.SetWarningFunc(func(msg string) {
+		_, _ = fmt.Fprintf(os.Stderr, "warning: %s\n", msg)
+	})
 	a, err := createApp()
 	if err != nil {
 		fatal(err)

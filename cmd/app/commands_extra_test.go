@@ -19,6 +19,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/oxcafedead/passone/internal/app"
+	"github.com/oxcafedead/passone/internal/cliputil"
 	"github.com/oxcafedead/passone/internal/sshx"
 	"github.com/oxcafedead/passone/internal/store"
 	"golang.org/x/crypto/ssh"
@@ -309,6 +310,34 @@ func TestCmdCopy(t *testing.T) {
 		out := readOut(t, e.stdout)
 		if !strings.Contains(out, "Password copied to clipboard") {
 			t.Fatalf("output = %q", out)
+		}
+	})
+
+	// The history formats have to be on the item itself, because Windows snapshots
+	// it as it is set. When that marker goes on the user is told so, and nothing
+	// is left unsaid: an unmarked copy reaches Clipboard History and the cloud.
+	t.Run("reports the history exclusion when the marker went on", func(t *testing.T) {
+		e := newTestEnv(t)
+		_ = setupStore(t, e)
+		unlockPGP(t, e)
+		if err := e.app.SavePassword("site", []byte("hunter2\n")); err != nil {
+			t.Fatalf("SavePassword: %v", err)
+		}
+		var warned []string
+		cliputil.SetWarningFunc(func(msg string) { warned = append(warned, msg) })
+		t.Cleanup(func() { cliputil.SetWarningFunc(nil) })
+
+		if err := cmdCopy(e, []string{"site"}); err != nil {
+			t.Fatalf("cmdCopy: %v", err)
+		}
+		if out := readOut(t, e.stdout); !strings.Contains(out, "Marked to be kept out of Windows Clipboard History") {
+			t.Fatalf("output = %q, want the exclusion reported", out)
+		}
+		if errOut := readOut(t, e.stderr); strings.Contains(errOut, "Clipboard History") {
+			t.Fatalf("stderr = %q, want no caveat when the marker went on", errOut)
+		}
+		if len(warned) != 0 {
+			t.Fatalf("warnings = %v, want none", warned)
 		}
 	})
 }

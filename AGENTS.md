@@ -25,7 +25,7 @@ Windows password manager (`passone`) backed by a self-contained OpenPGP store. I
 | `internal/store` | pass-format store layout (`*.gpg`, `.gpg-id`) |
 | `internal/security` | DPAPI sealing, memory zeroing |
 | `internal/config` | Config persistence, ACLs, paths |
-| `internal/cliputil` | Clipboard write + auto-clear |
+| `internal/cliputil` | Clipboard write, auto-clear, Clipboard History markers |
 | `internal/version` | Single release-version source; injected via `-ldflags` at build time |
 | `tools/checkicon` | CI gate: asserts the GUI exe embeds an icon resource |
 | `tools/checkui` | CI gate: asserts no Svelte component has dead interactivity and no renderer escape hatch (`{@html}`, `innerHTML`, missing CSP) |
@@ -202,6 +202,16 @@ Recommended local order before pushing:
   and is not part of CI. Fix them before wiring it in, otherwise it is not a
   usable gate.
 - Windows-only code uses `golang.org/x/sys/windows`, `syscall` lazy DLLs, and DPAPI. Cross-platform refactors need careful review.
+- Clipboard copies are published with the `CanIncludeInClipboardHistory`,
+  `CanUploadToCloudClipboard` and `ExcludeClipboardContentFromMonitorProcessing`
+  formats (DWORD 0/0/1). Windows snapshots an item into Clipboard History and the
+  cloud clipboard at `SetClipboardData`, so **no clear can reach them** — the
+  formats are the only lever, they are a request Windows may ignore, and there is
+  no API to delete a snapshot. `cliputil.Copied` therefore returns a
+  `Result` whose `HistoryExcluded` says whether the marker actually went on, and
+  the GUI/CLI warn when it did not. The `passone:clipboard-warning` event exists
+  because a clear runs on a timer after the copy call returned, so its failures
+  cannot travel back through that call's return value.
 - `tests/interop/run.ps1` is a manual integration harness that requires a built
   `passone.exe` and a real GnuPG installation. It is not part of `go test ./...`.
 - `tests/interop/run.ps1` is a manual integration harness that requires a built `passone.exe` and a real GnuPG installation. It is not part of `go test ./...`.

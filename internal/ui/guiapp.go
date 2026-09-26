@@ -40,8 +40,9 @@ func New() (*GUI, error) {
 		return nil, err
 	}
 	g := &GUI{core: core}
-	core.OnLock(func() { g.emit("passone:locked") })
-	core.OnUnlock(func() { g.emit("passone:unlocked") })
+	core.OnLock(func() { g.emit("passone:locked", nil) })
+	core.OnUnlock(func() { g.emit("passone:unlocked", nil) })
+	cliputil.SetWarningFunc(g.clipboardWarning)
 	return g, nil
 }
 
@@ -53,13 +54,21 @@ func (g *GUI) SetContext(ctx context.Context) {
 	g.mu.Unlock()
 }
 
-func (g *GUI) emit(name string) {
+func (g *GUI) emit(name string, data any) {
 	g.mu.Lock()
 	ctx := g.ctx
 	g.mu.Unlock()
 	if ctx != nil {
-		runtime.EventsEmit(ctx, name, nil)
+		runtime.EventsEmit(ctx, name, data)
 	}
+}
+
+// clipboardWarning surfaces a clipboard guarantee that could not be kept, above
+// all a delayed clear that failed. It arrives long after the copy call returned,
+// so there is no return value left to carry it and the frontend hears about it
+// through the event stream instead.
+func (g *GUI) clipboardWarning(msg string) {
+	g.emit("passone:clipboard-warning", msg)
 }
 
 // IsUnlocked reports whether decrypted key material is in memory.
@@ -103,6 +112,32 @@ func (g *GUI) AutoLockMinutes() int { return g.core.Config().AutoLockMinutes }
 // ClipboardClearSeconds returns how long copied secrets stay on the clipboard.
 func (g *GUI) ClipboardClearSeconds() int { return g.core.Config().ClipboardClearSeconds }
 
+// ClipboardHistoryEnabled reports whether Windows is keeping a Clipboard History
+// for this user, or may sync the clipboard to their other devices. PassOne marks
+// its copies so Windows skips both, but it cannot force that: an unreadable
+// setting is reported as enabled so the frontend keeps showing the caveat, and
+// the copy is reported as not excluded when the marker itself did not go on.
+func (g *GUI) ClipboardHistoryEnabled() bool {
+	on, err := cliputil.HistoryEnabled()
+	if err != nil {
+		return true
+	}
+	return on
+}
+
+// copySecret writes a secret to the clipboard and warns the user when Windows
+// could not be asked to keep it out of Clipboard History.
+func (g *GUI) copySecret(text string) error {
+	res, err := cliputil.Copied(text, g.core.Config().ClipboardClearSeconds)
+	if err != nil {
+		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
+	}
+	if caveat := res.Caveat(); caveat != "" {
+		g.clipboardWarning(caveat)
+	}
+	return nil
+}
+
 // ListPasswords returns all password paths in the configured store. It does
 // not require an unlocked session and never reveals secret material.
 func (g *GUI) ListPasswords() ([]string, error) {
@@ -120,9 +155,10 @@ func (g *GUI) ShowPassword(name string) (string, error) {
 	return text, nil
 }
 
-// CopyPassword writes the first line of an entry to the Windows clipboard and
-// schedules clearing it, mirroring the CLI 'copy' behaviour. The secret is
-// never returned to the frontend.
+// CopyPassword writes the first line of an entry to the Windows clipboard,
+// marked so Clipboard History and the cloud clipboard skip it, and schedules
+// clearing it, mirroring the CLI 'copy' behaviour. The secret is never returned
+// to the frontend.
 func (g *GUI) CopyPassword(name string) error {
 	plaintext, err := g.core.ShowPassword(name)
 	if err != nil {
@@ -133,10 +169,7 @@ func (g *GUI) CopyPassword(name string) error {
 	if i := strings.IndexByte(text, '\n'); i >= 0 {
 		text = text[:i]
 	}
-	if err := cliputil.Copied(text, g.core.Config().ClipboardClearSeconds); err != nil {
-		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
-	}
-	return nil
+	return g.copySecret(text)
 }
 
 // CopyTOTP generates the current TOTP code for the named entry and copies it
@@ -147,8 +180,8 @@ func (g *GUI) CopyTOTP(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := cliputil.Copied(code, g.core.Config().ClipboardClearSeconds); err != nil {
-		return "", fmt.Errorf("unable to write to the Windows clipboard: %w", err)
+	if err := g.copySecret(code); err != nil {
+		return "", err
 	}
 	return code, nil
 }
@@ -187,10 +220,7 @@ func (g *GUI) CopyUsername(name string) error {
 	if user == "" {
 		return fmt.Errorf("no username found for %s (check the entry body or its file name)", name)
 	}
-	if err := cliputil.Copied(user, g.core.Config().ClipboardClearSeconds); err != nil {
-		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
-	}
-	return nil
+	return g.copySecret(user)
 }
 
 // CreatePassword adds a new entry from a form. The name becomes the first

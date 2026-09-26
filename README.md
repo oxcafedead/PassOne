@@ -25,7 +25,7 @@ Unlike most clients, it does **not** need `gpg.exe`, `git.exe`, or `ssh.exe` ins
 - 📂 **Pass-compatible** — reads and writes standard pass stores: `.gpg-id`, folders, and `*.gpg` files.
 - 🔄 **Git sync** — `clone`, `status`, and `sync` (fetch/pull/push) without an external git installation.
 - 🔒 **Security-first** — keys are sealed with Windows DPAPI; decrypted key material lives in memory only during an unlocked session; idle auto-lock; best-effort memory zeroing.
-- 📋 **Clipboard auto-clear** — copied passwords are removed from the clipboard after a configurable timeout.
+- 📋 **Clipboard auto-clear** — copied passwords are removed from the clipboard after a configurable timeout, and are marked so Windows keeps them out of Clipboard History and the cloud clipboard.
 
 ---
 
@@ -96,7 +96,7 @@ Data is stored in `%LOCALAPPDATA%\PassOne` by default. You can override this wit
 - **Key storage:** private keys are stored encrypted (AES-256-GCM) in `%LOCALAPPDATA%\PassOne`. The sealing key is protected by Windows DPAPI for the current user.
 - **Memory:** decrypted keys exist in memory only during an unlocked session. They are dropped on lock or idle timeout, with best-effort buffer zeroing.
 - **Host verification:** SSH host keys are captured on first contact and stored per `host:port`; the key that gets stored is the one whose fingerprint you confirmed, and if a host key changes the connection is refused.
-- **Clipboard:** copied passwords are automatically removed from the clipboard after the configured timeout.
+- **Clipboard:** copied passwords are automatically removed from the clipboard after the configured timeout. They are also published with the `CanIncludeInClipboardHistory`, `CanUploadToCloudClipboard` and `ExcludeClipboardContentFromMonitorProcessing` markers, so Windows should skip its Clipboard History and the cloud clipboard. Windows takes its snapshot when the item is set, before any clear, and the marker is a request a Windows build may ignore, so turn Clipboard history off in Windows Settings → System → Clipboard if that matters to you.
 - **Atomic writes:** password files are written to a temporary file and only moved into place after encryption succeeds.
 
 ---

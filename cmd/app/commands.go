@@ -264,6 +264,32 @@ func cmdUsername(e *env, args []string) error {
 	return nil
 }
 
+// copyToClipboard writes a secret to the clipboard and tells the user what they
+// can rely on: the delayed clear always, the exclusion from Windows Clipboard
+// History and the cloud clipboard only when Windows took the marker. The clear
+// itself is reported later, through the warning handler in main.
+func copyToClipboard(e *env, what, text string, clearSeconds int) error {
+	res, err := cliputil.Copied(text, clearSeconds)
+	if err != nil {
+		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
+	}
+	if clearSeconds > 0 {
+		e.printf("%s copied to clipboard for %d seconds.\n", what, clearSeconds)
+	} else {
+		e.printf("%s copied to clipboard.\n", what)
+	}
+	if res.HistoryExcluded {
+		e.printf("Marked to be kept out of Windows Clipboard History and the cloud clipboard.\n")
+		return nil
+	}
+	// The marker is best effort, so it is only worth a warning when there is
+	// somewhere for the secret to end up.
+	if on, err := cliputil.HistoryEnabled(); err != nil || on {
+		e.eprintf("warning: %s.\n", res.Caveat())
+	}
+	return nil
+}
+
 // cmdCopyUsername copies the entry's login to the clipboard without revealing
 // the secret.
 func cmdCopyUsername(e *env, args []string) error {
@@ -278,13 +304,7 @@ func cmdCopyUsername(e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg := e.app.Config()
-	clearSeconds := cfg.ClipboardClearSeconds
-	if err := cliputil.Copied(login, clearSeconds); err != nil {
-		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
-	}
-	e.printf("Login copied to clipboard for %d seconds.\n", clearSeconds)
-	return nil
+	return copyToClipboard(e, "Login", login, e.app.Config().ClipboardClearSeconds)
 }
 
 func printPlaintext(e *env, plaintext []byte, full bool) error {
@@ -321,13 +341,7 @@ func cmdCopy(e *env, args []string) error {
 	if i := strings.IndexByte(text, '\n'); i >= 0 {
 		text = text[:i]
 	}
-	cfg := e.app.Config()
-	clearSeconds := cfg.ClipboardClearSeconds
-	if err := cliputil.Copied(text, clearSeconds); err != nil {
-		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
-	}
-	e.printf("Password copied to clipboard for %d seconds.\n", clearSeconds)
-	return nil
+	return copyToClipboard(e, "Password", text, e.app.Config().ClipboardClearSeconds)
 }
 
 func cmdTOTP(e *env, args []string) error {
@@ -342,13 +356,7 @@ func cmdTOTP(e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg := e.app.Config()
-	clearSeconds := cfg.ClipboardClearSeconds
-	if err := cliputil.Copied(code, clearSeconds); err != nil {
-		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
-	}
-	e.printf("TOTP copied to clipboard for %d seconds.\n", clearSeconds)
-	return nil
+	return copyToClipboard(e, "TOTP", code, e.app.Config().ClipboardClearSeconds)
 }
 
 func cmdSave(e *env, args []string) error {

@@ -12,6 +12,7 @@
     HasTOTP,
     Username,
     ClipboardClearSeconds,
+    ClipboardHistoryEnabled,
     CreatePassword,
     UpdatePassword,
     RemovePassword,
@@ -95,6 +96,13 @@ let lockPass: string = ''
   let copiedName: string | null = null
   let copiedRemaining: number = 0
   let copyTimer: ReturnType<typeof setInterval> | null = null
+
+  // Windows snapshots the clipboard into Clipboard History and the cloud
+  // clipboard as an item is set, so the countdown below cannot reach what it
+  // already took. The backend marks its copies so Windows skips both stores; if
+  // the account has the history switched on, say so rather than implying the
+  // countdown is the whole story.
+  let clipboardHistory: boolean = false
 
   type EditingState = {mode: 'add'} | {mode: 'edit'; name: string} | null
   let editing: EditingState = null
@@ -273,6 +281,11 @@ let lockPass: string = ''
     }
     try {
       clearSeconds = await ClipboardClearSeconds()
+    } catch (_) {
+      // keep default
+    }
+    try {
+      clipboardHistory = (await ClipboardHistoryEnabled()) ?? false
     } catch (_) {
       // keep default
     }
@@ -500,6 +513,19 @@ let lockPass: string = ''
       clearInterval(copyUsernameTimer)
       copyUsernameTimer = null
     }
+  }
+
+  // What the countdown badge does and does not promise. Windows snapshots the
+  // clipboard into Clipboard History and the cloud clipboard as the item is set,
+  // so no clear can reach what those stores already took, and the marker
+  // PassOne writes is a request rather than something Windows guarantees.
+  function copyBadgeTitle(): string {
+    const cleared = 'Removed from the clipboard when the countdown ends.'
+    if (!clipboardHistory) {
+      return cleared + ' Windows Clipboard History and the cloud clipboard are off for this account.'
+    }
+    return cleared +
+      ' Windows Clipboard History is on: PassOne asks Windows to keep this out of the history and the cloud clipboard, but a copy that was already snapshotted, or a Windows build that ignores the request, is not covered.'
   }
 
   function onLockEvent(): void {
@@ -994,9 +1020,15 @@ let lockPass: string = ''
       sshLoaded = true
       void refresh()
     })
+    // A clipboard clear runs on a timer after the copy call returned, so a
+    // failure arrives here rather than as an error the button could show.
+    const offWarning = EventsOn('passone:clipboard-warning', (msg: string) => {
+      flash(`Clipboard: ${msg}`, true)
+    })
     return () => {
       offLock()
       offUnlock()
+      offWarning()
       stopCountdown()
       stopTOTPCountdown()
       if (statusTimer) {
@@ -1178,13 +1210,13 @@ let lockPass: string = ''
           <h2 class="text-main min-w-0 truncate font-mono text-sm font-medium">{selected}</h2>
           <span class="flex-1"></span>
           {#if copiedUsernameName === selected}
-            <span class="badge-success rounded-md px-2 py-1 text-xs">Username · clears in {copiedUsernameRemaining}s</span>
+            <span class="badge-success rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>Username · clears in {copiedUsernameRemaining}s</span>
           {/if}
           {#if copiedName === selected}
-            <span class="badge-success rounded-md px-2 py-1 text-xs">Copied · clears in {copiedRemaining}s</span>
+            <span class="badge-success rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>Copied · clears in {copiedRemaining}s</span>
           {/if}
           {#if copiedTOTPName === selected}
-            <span class="badge-success rounded-md px-2 py-1 text-xs">TOTP · clears in {copiedTOTPRemaining}s</span>
+            <span class="badge-success rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>TOTP · clears in {copiedTOTPRemaining}s</span>
           {/if}
           <button
             data-testid="reveal"
@@ -1580,6 +1612,15 @@ let lockPass: string = ''
                 <input type="number" min="1" bind:value={sw.clipboardClearSeconds} class="input rounded-lg px-3 py-2 text-sm"/>
               </label>
             </div>
+            <p class="text-faint text-xs leading-relaxed">
+              Copied secrets are marked so Windows keeps them out of Clipboard History and the cloud clipboard,
+              which snapshot an item the moment it is copied. That marker is a request Windows may ignore, so the
+              countdown above is the only part PassOne can guarantee.
+              {#if clipboardHistory}
+                <span class="text-danger">Clipboard history is on for this account</span>: turn it off in Windows
+                Settings, System, Clipboard if a copy you cannot retract is not acceptable.
+              {/if}
+            </p>
             <div class="grid grid-cols-2 gap-2">
               <label class="text-faint flex flex-col gap-1 text-xs">
                 Git author name
@@ -1764,6 +1805,15 @@ let lockPass: string = ''
             <input type="number" min="1" bind:value={sw.clipboardClearSeconds} class="input rounded-lg px-3 py-2 text-sm"/>
           </label>
         </div>
+        <p class="text-faint text-xs leading-relaxed">
+          Copied secrets are marked so Windows keeps them out of Clipboard History and the cloud clipboard,
+          which snapshot an item the moment it is copied. That marker is a request Windows may ignore, so the
+          countdown above is the only part PassOne can guarantee.
+          {#if clipboardHistory}
+            <span class="text-danger">Clipboard history is on for this account</span>: turn it off in Windows
+            Settings, System, Clipboard if a copy you cannot retract is not acceptable.
+          {/if}
+        </p>
         <label class="text-faint flex flex-col gap-1 text-xs">
           Username source
           <select bind:value={sw.usernameSource} class="input rounded-lg px-3 py-2 text-sm">

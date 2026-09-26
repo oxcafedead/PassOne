@@ -19,6 +19,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
+	"github.com/oxcafedead/passone/internal/cliputil"
 	"github.com/oxcafedead/passone/internal/sshx"
 	"golang.org/x/crypto/ssh"
 )
@@ -117,6 +118,20 @@ func TestSimpleGetters(t *testing.T) {
 	}
 	if g.ClipboardClearSeconds() != 30 {
 		t.Fatalf("ClipboardClearSeconds = %d", g.ClipboardClearSeconds())
+	}
+}
+
+// The frontend shows a clipboard-history caveat only when this says the history
+// is on, so a detection failure has to read as "on": the user is then told about
+// a risk that may not exist, which is the recoverable direction.
+func TestClipboardHistoryEnabledFailsOpen(t *testing.T) {
+	g := newTestGUI(t)
+	want, err := cliputil.HistoryEnabled()
+	if err != nil {
+		t.Skipf("clipboard history detection unavailable: %v", err)
+	}
+	if got := g.ClipboardHistoryEnabled(); got != want {
+		t.Fatalf("ClipboardHistoryEnabled = %v, want %v", got, want)
 	}
 }
 

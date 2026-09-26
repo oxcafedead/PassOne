@@ -136,6 +136,10 @@ func (a *App) SetAutoLock(minutes int) error { return a.gui.SetAutoLock(minutes)
 // SetClipboardClear updates the clipboard clear delay in seconds.
 func (a *App) SetClipboardClear(seconds int) error { return a.gui.SetClipboardClear(seconds) }
 
+// ClipboardHistoryEnabled reports whether Windows is keeping a Clipboard History
+// for this user, or may sync the clipboard to their other devices.
+func (a *App) ClipboardHistoryEnabled() bool { return a.gui.ClipboardHistoryEnabled() }
+
 // SetGitAuthor updates the git commit identity.
 func (a *App) SetGitAuthor(name, email string) error { return a.gui.SetGitAuthor(name, email) }
 
