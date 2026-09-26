@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2233,14 +2234,16 @@ func TestStartAutoLockWithZeroTimeout(t *testing.T) {
 	a.Lock()
 }
 
-// withShortAutoLockTick shrinks the idle re-evaluation interval and returns the
-// restore func. Idle timeouts are minute-granular, so the goroutine's tick is
-// the only knob a test can turn to observe a drop.
-func withShortAutoLockTick(t *testing.T) func() {
+// withShortAutoLockTick shrinks the idle re-evaluation interval for a and
+// returns the restore func. Idle timeouts are minute-granular, so the
+// goroutine's tick is the only knob a test can turn to observe a drop. It is
+// per-App state on purpose: a package global would be written here while a
+// timer goroutine from an earlier test may still be reading it.
+func withShortAutoLockTick(t *testing.T, a *App) func() {
 	t.Helper()
-	prev := autoLockTick
-	autoLockTick = time.Millisecond
-	return func() { autoLockTick = prev }
+	prev := a.autoLockTick
+	a.setAutoLockTick(time.Millisecond)
+	return func() { a.setAutoLockTick(prev) }
 }
 
 // waitForCondition polls cond until it holds or the test budget runs out.
@@ -2263,6 +2266,15 @@ func keyDiskLen(a *App) int {
 	return len(a.keyDisk)
 }
 
+// pgpSecretMaterialResident reports resident OpenPGP material under the app
+// lock. The idle auto-lock goroutine mutates the same service fields under that
+// lock, so a test may not read them directly.
+func pgpSecretMaterialResident(a *App) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.pgpSvc.HasSecretMaterial()
+}
+
 // timerChan returns the current idle timer stop channel under the app lock.
 func timerChan(a *App) chan struct{} {
 	a.mu.Lock()
@@ -2273,8 +2285,8 @@ func timerChan(a *App) chan struct{} {
 // ImportSSHKey leaves a decrypted signer resident without starting a session,
 // so the idle auto-lock has to bound it too.
 func TestAutoLockDropsResidentSSHKeyWhileLocked(t *testing.T) {
-	defer withShortAutoLockTick(t)()
 	a := newTestApp(t)
+	defer withShortAutoLockTick(t, a)()
 	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -2293,8 +2305,8 @@ func TestAutoLockDropsResidentSSHKeyWhileLocked(t *testing.T) {
 // LoadStoredSSHKey is reachable from the locked UI, so the signer it loads
 // while the session stays locked must not outlive the idle timeout.
 func TestAutoLockDropsStoredSSHKeyLoadedWhileLocked(t *testing.T) {
-	defer withShortAutoLockTick(t)()
 	a := newTestApp(t)
+	defer withShortAutoLockTick(t, a)()
 	if _, err := a.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -2317,20 +2329,20 @@ func TestAutoLockDropsStoredSSHKeyLoadedWhileLocked(t *testing.T) {
 // ImportPGPKey leaves decrypted entities and the passphrase resident without
 // starting a session, so the idle auto-lock has to drop those too.
 func TestAutoLockDropsImportedPGPKeyWhileLocked(t *testing.T) {
-	defer withShortAutoLockTick(t)()
 	a := newTestApp(t)
+	defer withShortAutoLockTick(t, a)()
 	if _, err := a.ImportPGPKey(armoredTestKey(t), []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
 		t.Fatalf("ImportPGPKey: %v", err)
 	}
 	if a.IsUnlocked() {
 		t.Fatal("expected the app to stay locked after import")
 	}
-	if !a.pgpSvc.HasSecretMaterial() {
+	if !pgpSecretMaterialResident(a) {
 		t.Fatal("expected decrypted OpenPGP entities to be resident after import")
 	}
 	a.startAutoLockWithTimeout(time.Millisecond)
 	waitForCondition(t, "the idle auto-lock to drop the OpenPGP entities", func() bool {
-		return !a.pgpSvc.HasSecretMaterial()
+		return !pgpSecretMaterialResident(a)
 	})
 }
 
@@ -2706,5 +2718,244 @@ func TestHasTOTP(t *testing.T) {
 	a.Lock()
 	if _, err := a.HasTOTP("totp/test"); err == nil {
 		t.Fatal("expected HasTOTP to fail when locked")
+	}
+}
+
+// TestStorePathConcurrentWithOpenLocalStore exercises the pairing the GUI
+// creates: Wails dispatches every binding call on its own goroutine, so a
+// config read (StorePath, bound to the settings panel) runs while a store
+// switch (OpenLocalStore) writes the same field. Run under -race this pins that
+// the read takes a.mu; without it the field is an unsynchronized 2-word string
+// access that can tear.
+func TestStorePathConcurrentWithOpenLocalStore(t *testing.T) {
+	a := newTestApp(t)
+	dirs := []string{
+		filepath.Join(t.TempDir(), "one"),
+		filepath.Join(t.TempDir(), "two"),
+	}
+	for _, dir := range dirs {
+		if _, err := store.Create(dir, []string{"DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"}); err != nil {
+			t.Fatalf("store.Create: %v", err)
+		}
+	}
+
+	var writer sync.WaitGroup
+	writer.Add(1)
+	go func() {
+		defer writer.Done()
+		for i := 0; i < 20; i++ {
+			if err := a.OpenLocalStore(dirs[i%len(dirs)]); err != nil {
+				t.Errorf("OpenLocalStore: %v", err)
+				return
+			}
+		}
+	}()
+
+	// The readers deliberately hold no lock: that is the bug under test.
+	var readers sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = a.StorePath()
+				}
+			}
+		}()
+	}
+	writer.Wait()
+	close(stop)
+	readers.Wait()
+
+	// The last write wins, and the reader reports the same value.
+	want := dirs[19%len(dirs)]
+	if got := a.StorePath(); got != want {
+		t.Fatalf("StorePath = %q, want %q", got, want)
+	}
+}
+
+// TestGitAuthorConcurrentWithSetGitAuthor pins the invariant behind the commit
+// author reads: SetGitAuthor writes a.cfg.GitAuthorName/GitAuthorEmail under
+// a.mu, and every reader goes through the locked gitAuthor accessor. The reader
+// spins because SetGitAuthor's write is followed within nanoseconds by
+// saveConfig's whole-struct copy, which is itself a read of the same words and
+// masks the write in the detector's shadow state; a caller that reads at a
+// human timescale (a real commit) would let the race through unreported.
+func TestGitAuthorConcurrentWithSetGitAuthor(t *testing.T) {
+	a := newTestApp(t)
+
+	var writer sync.WaitGroup
+	writer.Add(1)
+	go func() {
+		defer writer.Done()
+		for i := 0; i < 20; i++ {
+			if err := a.SetGitAuthor(fmt.Sprintf("Tester %d", i), fmt.Sprintf("t%d@example.com", i)); err != nil {
+				t.Errorf("SetGitAuthor: %v", err)
+				return
+			}
+		}
+	}()
+
+	var readers sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_, _ = a.gitAuthor()
+				}
+			}
+		}()
+	}
+	writer.Wait()
+	close(stop)
+	readers.Wait()
+
+	name, email := a.gitAuthor()
+	if name != "Tester 19" || email != "t19@example.com" {
+		t.Fatalf("gitAuthor = %q, %q", name, email)
+	}
+}
+
+// TestCommitPathsConcurrentWithSetGitAuthor runs the real commit paths against
+// SetGitAuthor: autoCommit is reached from SavePassword/RemovePassword and
+// CommitPassword from the entry menu, and Wails dispatches each on its own
+// goroutine, so both can read the author while a settings save rewrites it.
+func TestCommitPathsConcurrentWithSetGitAuthor(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatalf("ReadArmoredKeyRing: %v", err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if _, err := goGit.PlainInit(storeDir, false); err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	if err := gitx.Add(storeDir, ".gpg-id"); err != nil {
+		t.Fatalf("gitx.Add: %v", err)
+	}
+	if _, err := gitx.Commit(storeDir, "init store", "Tester", "t@example.com"); err != nil {
+		t.Fatalf("gitx.Commit: %v", err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := a.SavePassword("race/entry", []byte("secret123\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	if err := a.SetGitAuthor("Race Tester", "race@example.com"); err != nil {
+		t.Fatalf("SetGitAuthor: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			if err := a.SetGitAuthor(fmt.Sprintf("Tester %d", i), fmt.Sprintf("t%d@example.com", i)); err != nil {
+				t.Errorf("SetGitAuthor: %v", err)
+				return
+			}
+		}
+	}()
+
+	// The two commit paths are serialized against each other because a go-git
+	// worktree admits one operation at a time. That mutex orders the readers
+	// only; neither is ordered against the SetGitAuthor writes.
+	var gitMu sync.Mutex
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		gitMu.Lock()
+		defer gitMu.Unlock()
+		for i := 0; i < 10; i++ {
+			a.autoCommit("Save", "race/entry")
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		gitMu.Lock()
+		defer gitMu.Unlock()
+		for i := 0; i < 10; i++ {
+			if err := a.CommitPassword("race/entry"); err != nil && !errors.Is(err, gitx.ErrUpToDate) {
+				t.Errorf("CommitPassword: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+
+	name, email := a.gitAuthor()
+	if name != "Tester 9" || email != "t9@example.com" {
+		t.Fatalf("gitAuthor = %q, %q", name, email)
+	}
+}
+
+// TestImportPGPKeyConcurrentWithResidentCheck covers the import path against
+// the idle auto-lock goroutine, which reads the OpenPGP service's entity list
+// on every tick under a.mu. ImportSecret replaces that list in place, so it has
+// to run under the same lock; the reader here takes it, exactly as the tick does.
+func TestImportPGPKeyConcurrentWithResidentCheck(t *testing.T) {
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+
+	var importers sync.WaitGroup
+	importers.Add(1)
+	go func() {
+		defer importers.Done()
+		// Each import re-derives the vault key (Argon2id), so a few rounds are
+		// enough to keep the writer busy while the reader spins.
+		for i := 0; i < 3; i++ {
+			if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+				t.Errorf("ImportPGPKey: %v", err)
+				return
+			}
+		}
+	}()
+
+	var readers sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 2; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = pgpSecretMaterialResident(a)
+				}
+			}
+		}()
+	}
+	importers.Wait()
+	close(stop)
+	readers.Wait()
+
+	if !pgpSecretMaterialResident(a) {
+		t.Fatal("expected the imported key to be resident after the last import")
 	}
 }

@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `index.html`. A line that has to name one of these without using it is
   suppressed with `// checkui:allow`.
 
+### Fixed
+
+- Three data races on shared `App` state, all reachable in the GUI because
+  Wails dispatches every binding call on its own goroutine: `StorePath()` read
+  `cfg.StorePath` unlocked while `OpenLocalStore` wrote it,
+  `autoCommit`/`CommitPassword` read the commit author unlocked while
+  `SetGitAuthor` wrote it (a 2-word `string` header, so the read can tear), and
+  `ImportPGPKey` replaced the OpenPGP entity list unlocked while the idle
+  auto-lock goroutine reads it. Config reads now take `a.mu` or go through a
+  locked `gitAuthor()` accessor. CI now runs `go test -race ./...` with
+  `CGO_ENABLED=1`; the idle timer interval moved from a mutable package global
+  to per-`App` state so the test that shortens it cannot race another test's
+  timer goroutine.
+
 ## [v0.1.2] - 2026-09-25
 
 ### Fixed

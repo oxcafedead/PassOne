@@ -41,6 +41,7 @@ type App struct {
 
 	lastActivity time.Time
 	stopTimer    chan struct{}
+	autoLockTick time.Duration
 
 	lockHandlers   []func()
 	unlockHandlers []func()
@@ -133,6 +134,8 @@ func (a *App) SSHKeyID() string {
 
 // StorePath returns the currently configured store directory.
 func (a *App) StorePath() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.cfg.StorePath
 }
 
@@ -168,7 +171,12 @@ func (a *App) ImportPGPKey(block, keyPassphrase, lockPassword []byte) ([]*pgp.Ke
 	if len(lockPassword) == 0 {
 		return nil, errors.New("a non-empty lock password is required to import a key")
 	}
+	// ImportSecret replaces the service's entity list and passphrase in place,
+	// so it runs under a.mu: the idle auto-lock goroutine reads the same fields
+	// on every tick, and Wails dispatches this import concurrently with it.
+	a.mu.Lock()
 	infos, err := a.pgpSvc.ImportSecret(block, keyPassphrase)
+	a.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -667,9 +675,19 @@ func (a *App) startAutoLock() {
 	a.startAutoLockWithTimeout(timeout)
 }
 
-// autoLockTick is how often the idle timer re-evaluates resident key material.
-// It is a variable so tests can shorten the interval.
-var autoLockTick = 10 * time.Second
+// defaultAutoLockTick is how often the idle timer re-evaluates resident key
+// material. App.autoLockTick overrides it per application so a test can shorten
+// the interval without writing a package global that a timer goroutine
+// (possibly from another test) reads concurrently.
+const defaultAutoLockTick = 10 * time.Second
+
+// setAutoLockTick overrides the idle re-evaluation interval. It takes a.mu
+// because the interval is read when a timer goroutine is started.
+func (a *App) setAutoLockTick(d time.Duration) {
+	a.mu.Lock()
+	a.autoLockTick = d
+	a.mu.Unlock()
+}
 
 func (a *App) startAutoLockWithTimeout(timeout time.Duration) {
 	a.mu.Lock()
@@ -678,13 +696,17 @@ func (a *App) startAutoLockWithTimeout(timeout time.Duration) {
 	}
 	stop := make(chan struct{})
 	a.stopTimer = stop
+	tick := a.autoLockTick
+	if tick <= 0 {
+		tick = defaultAutoLockTick
+	}
 	a.mu.Unlock()
 
 	if timeout <= 0 {
 		return
 	}
 	go func() {
-		ticker := time.NewTicker(autoLockTick)
+		ticker := time.NewTicker(tick)
 		defer ticker.Stop()
 		for {
 			select {
@@ -882,6 +904,15 @@ func (a *App) SavePassword(name string, plaintext []byte) error {
 	return nil
 }
 
+// gitAuthor returns the configured commit author identity. It is snapshotted
+// under a.mu because the commit helpers run outside the lock (they do real
+// git work) while SetGitAuthor writes the fields under it.
+func (a *App) gitAuthor() (name, email string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.GitAuthorName, a.cfg.GitAuthorEmail
+}
+
 // CommitPassword stages and commits the named password file. The push must be
 // requested explicitly (see Sync).
 func (a *App) CommitPassword(name string) error {
@@ -907,7 +938,8 @@ func (a *App) CommitPassword(name string) error {
 		}
 	}
 	msg := "Update " + name
-	if _, err := gitx.Commit(st.Root(), msg, a.cfg.GitAuthorName, a.cfg.GitAuthorEmail); err != nil {
+	author, email := a.gitAuthor()
+	if _, err := gitx.Commit(st.Root(), msg, author, email); err != nil {
 		if errors.Is(err, gitx.ErrUpToDate) {
 			return nil
 		}
@@ -928,7 +960,8 @@ func (a *App) autoCommit(action, name string) {
 		_ = gitx.Add(st.Root(), rel)
 	}
 	msg := action + " " + name
-	_, _ = gitx.Commit(st.Root(), msg, a.cfg.GitAuthorName, a.cfg.GitAuthorEmail)
+	author, email := a.gitAuthor()
+	_, _ = gitx.Commit(st.Root(), msg, author, email)
 }
 
 // PasswordExists reports whether the named password is stored. It never touches

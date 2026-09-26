@@ -41,10 +41,25 @@ jobs:
         # `go test -coverprofile` is unreliable on Windows: the profile is resolved
         # relative to the test binary's working directory and is frequently not
         # written (or only partially written), producing a corrupt/missing file.
+        # Coverage runs without -race (the race runtime is far slower and the
+        # instrumented binaries are not the ones shipped); the race gate is the
+        # separate step below.
         shell: pwsh
         run: |
           go test -coverprofile="$env:GITHUB_WORKSPACE\coverage.out" ./...
           go run ./tools/coveragecheck -profile="$env:GITHUB_WORKSPACE\coverage.out" -threshold=70
+
+      - name: Run tests with the race detector
+        # The Wails bridge dispatches every binding call on its own goroutine, so
+        # unsynchronized access to App state is reachable in production, not just
+        # in theory. `-race` needs the race runtime, which requires cgo and
+        # therefore a C compiler: windows-latest has one (gcc via mingw), but
+        # CGO_ENABLED must be set explicitly because it defaults to 0 when no C
+        # compiler is detected at Go install time.
+        shell: pwsh
+        env:
+          CGO_ENABLED: 1
+        run: go test -race ./...
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0

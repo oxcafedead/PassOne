@@ -51,6 +51,11 @@ go test ./...
 go test ./internal/app
 go test ./internal/app -run TestImportUnlockDecryptFlow
 
+# Race detector (CI runs this over ./...; needs cgo and a C compiler)
+$env:CGO_ENABLED = 1
+go test -race ./internal/app
+go test -race ./internal/app -run TestStorePathConcurrentWithOpenLocalStore
+
 # GUI binary build
 cd cmd/gui
 wails build -skipbindings -s -clean
@@ -84,7 +89,7 @@ CI (`.github/workflows/ci.yml`) installs golangci-lint with `install-mode: goins
 ## CI / quality gates
 
 - Runs on `windows-latest` (the app is Windows-specific: systray, clipboard, registry, DPAPI).
-- Steps: checkout with full history → setup Go → setup Node → `npm ci && npm run build` → `go test` with coverage → Wails GUI build + `tools/checkicon` icon assertion → `golangci-lint` → SonarQube scan.
+- Steps: checkout with full history → setup Go → setup Node → `npm ci && npm run build` → `go test` with coverage → `go test -race ./...` → Wails GUI build + `tools/checkicon` icon assertion → `golangci-lint` → SonarQube scan.
 - Requires GitHub secret `SONAR_TOKEN`; project metadata is in `sonar-project.properties`.
 - `tools/checkui` needs no dedicated CI step: its test lives in the `tools/checkui`
   package, so the ordinary `go test ./...` step runs it. It reads
@@ -188,7 +193,7 @@ Recommended local order before pushing:
 ## Gotchas
 
 - `cmd/gui/main.go` embeds `all:frontend/dist`. If the frontend has not been built, `go test ./...` fails with `pattern all:frontend/dist: no matching files found`.
-- `go test -race` requires `CGO_ENABLED=1`; it is not used in CI.
+- `go test -race` needs `CGO_ENABLED=1` and a C compiler; the CI step sets it explicitly because `CGO_ENABLED` defaults to 0 when Go finds no C compiler at install time. It runs over `./...` as a separate step from the coverage run, which stays un-instrumented.
 - NEVER run `go build`/`go run` directly on `cmd/gui` as the app entrypoint: Wails requires its own build tags and aborts with `Error Wails applications will not build without the correct build tags`. Build the GUI with `wails build` from `cmd/gui` instead.
 - Do NOT pass `-nopackage` to `wails build`. Wails only generates the `-res.syso` (which embeds `build/windows/icon.ico`, the application manifest and version info) when `options.Pack` is true; with `-nopackage` the exe is produced silently without any icon resource, so Explorer/taskbar show a generic icon. The `-nopackage` flag only matters for non-Windows packaging and is never needed here.
 - The project targets Go 1.26 in `go.mod`, but `.golangci.yml` sets `run.go: '1.25'` so the linter can actually start. Do not change this unless the linter version is also updated.
