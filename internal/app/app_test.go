@@ -1155,7 +1155,6 @@ func TestStatusWithoutRemote(t *testing.T) {
 
 func TestCloneHostportAndGitHost(t *testing.T) {
 	a := newTestApp(t)
-
 	hp, err := a.CloneHostport("ssh://git@github.com/user/pass.git")
 	if err != nil {
 		t.Fatalf("CloneHostport: %v", err)
@@ -1164,15 +1163,41 @@ func TestCloneHostportAndGitHost(t *testing.T) {
 		t.Fatalf("CloneHostport = %q", hp)
 	}
 
-	cases := map[string]string{
+	// A port in the URL is part of the host a clone connects to, and trust is
+	// keyed on it; the scp-like form has no port, its colon starts the path.
+	hostports := map[string]string{
+		"git@github.com:user/pass.git":                 "github.com:22",
+		"ssh://git@github.com/user/pass.git":           "github.com:22",
+		"ssh://git@GitHub.com/user/pass.git":           "github.com:22",
+		"ssh://git@git.example.com:2222/user/pass.git": "git.example.com:2222",
+		"ssh://git.example.com:2222/user/pass.git":     "git.example.com:2222",
+		"git@git.example.com:2222/user/pass-store.git": "git.example.com:22",
+		"git@github.com":                               "github.com:22",
+	}
+	for in, want := range hostports {
+		if got := gitHostPortFromURL(in); got != want {
+			t.Errorf("gitHostPortFromURL(%q) = %q, want %q", in, got, want)
+		}
+		got, err := a.CloneHostport(in)
+		if err != nil {
+			t.Errorf("CloneHostport(%q): %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("CloneHostport(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	hosts := map[string]string{
 		"git@github.com:user/pass.git":                 "github.com",
 		"ssh://git@github.com/user/pass.git":           "github.com",
+		"ssh://git@git.example.com:2222/user/pass.git": "git.example.com:2222",
 		"git@git.example.com:2222/user/pass-store.git": "git.example.com",
 		"not-a-url": "not-a-url",
 	}
-	for in, want := range cases {
+	for in, want := range hosts {
 		if got := gitHostFromURL(in); got != want {
-			t.Fatalf("gitHostFromURL(%q) = %q, want %q", in, got, want)
+			t.Errorf("gitHostFromURL(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -1194,6 +1219,69 @@ func TestTrustHostAndKnownHosts(t *testing.T) {
 	list := a.KnownHostsList()
 	if len(list) != 1 {
 		t.Fatalf("KnownHostsList = %v", list)
+	}
+	// Re-trusting the same key is a no-op, and a different key for a host that
+	// is already trusted is refused: the store keeps the key the user confirmed.
+	if err := a.TrustHost("github.com", key); err != nil {
+		t.Fatalf("re-TrustHost same key: %v", err)
+	}
+	_, otherPub, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSigner, err := ssh.NewSignerFromKey(otherPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.TrustHost("github.com", otherSigner.PublicKey()); !errors.Is(err, sshx.ErrHostKeyChanged) {
+		t.Fatalf("expected ErrHostKeyChanged, got %v", err)
+	}
+	list = a.KnownHostsList()
+	if len(list) != 1 {
+		t.Fatalf("KnownHostsList after refused TrustHost = %v", list)
+	}
+}
+
+// TestTrustHostIsPerPort pins that trust is keyed on host:port: a key confirmed
+// for 127.0.0.1:<p1> must not make 127.0.0.1:<p2> known, and a different key
+// there is unknown rather than a reported key change.
+func TestTrustHostIsPerPort(t *testing.T) {
+	a := newTestApp(t)
+	firstHostport, firstPub, stopFirst := startTestSSHServer(t)
+	defer stopFirst()
+	secondHostport, secondPub, stopSecond := startTestSSHServer(t)
+	defer stopSecond()
+
+	if err := a.TrustHost(firstHostport, firstPub); err != nil {
+		t.Fatalf("TrustHost: %v", err)
+	}
+	gotPub, known, err := a.HostCheck(firstHostport)
+	if err != nil || !known {
+		t.Fatalf("HostCheck trusted port: known=%v err=%v", known, err)
+	}
+	if !bytes.Equal(gotPub.Marshal(), firstPub.Marshal()) {
+		t.Fatal("host public key mismatch")
+	}
+
+	gotPub, known, err = a.HostCheck(secondHostport)
+	if err != nil {
+		t.Fatalf("second port must be unknown, not an error: %v", err)
+	}
+	if known {
+		t.Fatal("trust on one port must not carry to another port")
+	}
+	if !bytes.Equal(gotPub.Marshal(), secondPub.Marshal()) {
+		t.Fatal("captured public key mismatch")
+	}
+	if known, err := knownHostTrusted(a.known, secondHostport); known || !errors.Is(err, sshx.ErrUnknownHostKey) {
+		t.Fatalf("second port must be unknown, got known=%v err=%v", known, err)
+	}
+	// Trusting the second port's own key is a separate decision and succeeds.
+	if err := a.TrustHost(secondHostport, secondPub); err != nil {
+		t.Fatalf("TrustHost second port: %v", err)
+	}
+	if len(a.KnownHostsList()) != 2 {
+		t.Fatalf("KnownHostsList = %v, want one record per port", a.KnownHostsList())
 	}
 }
 
@@ -1311,11 +1399,18 @@ func TestHostCheck(t *testing.T) {
 		t.Fatalf("TrustHost: %v", err)
 	}
 	_, known, err = a.HostCheck(hostport)
-	if err == nil {
-		t.Fatal("expected error for changed host key")
+	if !errors.Is(err, sshx.ErrHostKeyChanged) {
+		t.Fatalf("expected ErrHostKeyChanged, got %v", err)
 	}
 	if known {
 		t.Fatal("expected known=false for changed host key")
+	}
+	// The report has to name both keys, or the user cannot tell a rotation
+	// from an attack.
+	for _, fp := range []string{sshx.HostKeyFingerprint(pub), sshx.HostKeyFingerprint(otherSigner.PublicKey())} {
+		if !strings.Contains(err.Error(), fp) {
+			t.Fatalf("change report %q does not name %s", err, fp)
+		}
 	}
 
 	// Untrusted but reachable server -> pub, false, nil.

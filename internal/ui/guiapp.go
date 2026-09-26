@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/oxcafedead/passone/internal/app"
 	"github.com/oxcafedead/passone/internal/cliputil"
@@ -25,6 +26,10 @@ type GUI struct {
 	core *app.App
 	mu   sync.Mutex
 	ctx  context.Context
+	// probed holds the key PrepareClone last saw for a host, keyed on
+	// sshx.HostPortKey, so TrustHost can store the very key the user was shown
+	// instead of asking the server a second time.
+	probed map[string]ssh.PublicKey
 }
 
 // New boots the core application with the same data directory as the CLI
@@ -365,7 +370,9 @@ type ClonePrep struct {
 }
 
 // PrepareClone captures the server host key of a git SSH URL and reports
-// whether it is already trusted. It never touches the store.
+// whether it is already trusted. It never touches the store. The captured key
+// is remembered until the next probe of the same host so TrustHost can store
+// the key this fingerprint belongs to.
 func (g *GUI) PrepareClone(url string) (ClonePrep, error) {
 	hostport, err := g.core.CloneHostport(strings.TrimSpace(url))
 	if err != nil {
@@ -373,11 +380,12 @@ func (g *GUI) PrepareClone(url string) (ClonePrep, error) {
 	}
 	pub, known, err := g.core.HostCheck(hostport)
 	if err != nil {
-		if strings.Contains(err.Error(), "host key changed") {
-			return ClonePrep{}, fmt.Errorf("SSH host key CHANGED for %s - possible attack; refusing to trust automatically", sshx.NormalizeHost(hostport))
+		if errors.Is(err, sshx.ErrHostKeyChanged) {
+			return ClonePrep{}, fmt.Errorf("possible man-in-the-middle on %s, not trusting automatically: %w", sshx.NormalizeHost(hostport), err)
 		}
 		return ClonePrep{}, err
 	}
+	g.rememberProbed(hostport, pub)
 	return ClonePrep{
 		Host:        hostport,
 		Fingerprint: sshx.HostKeyFingerprint(pub),
@@ -385,16 +393,32 @@ func (g *GUI) PrepareClone(url string) (ClonePrep, error) {
 	}, nil
 }
 
-// TrustHost records the just-probed host key as trusted.
+// TrustHost records the host key that PrepareClone put on screen. It must not
+// probe the host again: a second connection can be answered with a different
+// key than the one the user confirmed, and that key is the one that would be
+// written to known_hosts.
 func (g *GUI) TrustHost(hostport string) error {
-	pub, known, err := g.core.HostCheck(hostport)
-	if err != nil {
-		return err
+	key, ok := g.probedKey(hostport)
+	if !ok {
+		return fmt.Errorf("no host key confirmed for %s; check the host key first", sshx.NormalizeHost(hostport))
 	}
-	if known {
-		return nil
+	return g.core.TrustHost(hostport, key)
+}
+
+func (g *GUI) rememberProbed(hostport string, key ssh.PublicKey) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.probed == nil {
+		g.probed = make(map[string]ssh.PublicKey)
 	}
-	return g.core.TrustHost(hostport, pub)
+	g.probed[sshx.HostPortKey(hostport)] = key
+}
+
+func (g *GUI) probedKey(hostport string) (ssh.PublicKey, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	key, ok := g.probed[sshx.HostPortKey(hostport)]
+	return key, ok
 }
 
 // CloneStore clones an SSH git URL into dir (auto-derived when empty) and

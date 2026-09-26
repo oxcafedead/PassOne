@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The GUI trusted the wrong SSH host key. `TrustHost` opened a *second*
+  connection to the host and stored the key that connection returned, while the
+  fingerprint the user had confirmed came from the first one. An attacker who
+  answered the two connections differently got their key written to
+  `known_hosts`. The GUI now keeps the key `PrepareClone` captured and stores
+  exactly that, with no second probe, and refuses to trust a host that was
+  never probed. The CLI already persisted the confirmed key and is unchanged.
+- `KnownHostsStore.Add` treated any verification error as "not present" and
+  appended, so `App.TrustHost` would overwrite the key of an already-trusted
+  host. The two wrappers that tried to prevent this matched on
+  `strings.Contains(err.Error(), "host key changed")`, which is why the hole
+  survived. `Add` now refuses a changed key with `sshx.ErrHostKeyChanged` and
+  the invariant lives in the only writer; both wrappers use `errors.Is`, and the
+  error names the stored and the presented fingerprint so a rotation can be
+  told apart from an attack.
+- Host-key trust is now keyed on `host:port` instead of the bare hostname.
+  A key confirmed on `github.com:22` said nothing about `github.com:2222` but
+  was accepted there anyway, and any service that answered on a port of an
+  already-trusted host was reported as a key change. Records written by earlier
+  versions carry a bare host and are read as the default port, so an existing
+  `known_hosts` file keeps working. Since `Add` now refuses a second key for a
+  host that already has one, storing an extra key type for a host still means
+  editing `known_hosts` by hand; hosts that already publish several keys are
+  unaffected, see below. Git URLs are read the same way: the port of an
+  `ssh://host:port/...` remote is what gets probed and trusted, and the scp-like
+  form (`git@host:path`) has no port because there the colon starts the path.
+  `passone clone` no longer keeps its own copy of that parser, it asks the app
+  for the host:port it is about to connect to.
+- `KnownHostsStore.Verify` returned on the first record matching the host, so a
+  host that legitimately publishes two keys (ed25519 and rsa, say) was reported
+  as changed whenever the negotiated key was not the first one stored. Every
+  record for the host is now considered, and a match on any of them verifies.
 - The GUI webview now ships a `Content-Security-Policy` in
   `cmd/gui/frontend/index.html`. Wails v2 has no CSP option of its own, so that
   meta tag is the only renderer-side policy the app can have. The webview is

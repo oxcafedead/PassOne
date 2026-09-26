@@ -1059,13 +1059,14 @@ func (a *App) SSHPublicKey() ([]byte, error) {
 
 // HostCheck captures the server host key and reports whether it is known.
 // On first contact the key is returned with known=false for user confirmation.
+// A host that is trusted with a different key returns that key plus an error
+// wrapping sshx.ErrHostKeyChanged, so callers must not treat it as unknown.
 func (a *App) HostCheck(hostport string) (ssh.PublicKey, bool, error) {
 	pub, err := sshx.CaptureHostKey(hostport)
 	if err != nil {
 		return nil, false, err
 	}
-	host := sshx.NormalizeHost(hostport)
-	verifyErr := a.known.Verify(host, pub)
+	verifyErr := a.known.Verify(hostport, pub)
 	if verifyErr == nil {
 		return pub, true, nil
 	}
@@ -1075,9 +1076,12 @@ func (a *App) HostCheck(hostport string) (ssh.PublicKey, bool, error) {
 	return pub, false, nil
 }
 
-// TrustHost records the user-approved host key.
+// TrustHost records the user-approved host key. The key must be the one the
+// user confirmed out of band; a host that is already trusted with a different
+// key is refused (sshx.ErrHostKeyChanged) rather than overwritten, so the
+// guard does not depend on the caller re-checking first.
 func (a *App) TrustHost(hostport string, key ssh.PublicKey) error {
-	return a.known.Add(sshx.NormalizeHost(hostport), key)
+	return a.known.Add(hostport, key)
 }
 
 // KnownHostsList lists trusted hosts with fingerprints.
@@ -1122,11 +1126,10 @@ func (a *App) CloneStore(url, dir string) error {
 	if dir == "" {
 		dir = a.defaultCloneDir(url)
 	}
-	host := gitHostFromURL(url)
-	if host == "" {
+	hostport := gitHostPortFromURL(url)
+	if hostport == "" {
 		return fmt.Errorf("cannot determine SSH host from %q", url)
 	}
-	hostport := host + ":22"
 
 	if a.sshKeyOrNil() == nil {
 		return errors.New("SSH key is not loaded; import an SSH private key or unlock first")
@@ -1135,10 +1138,10 @@ func (a *App) CloneStore(url, dir string) error {
 	// Host key verification: capture and compare with our known_hosts store.
 	known, verifyErr := knownHostTrusted(a.known, hostport)
 	if errors.Is(verifyErr, sshx.ErrHostKeyChanged) {
-		return fmt.Errorf("SSH host key changed for %s; refusing to connect", host)
+		return fmt.Errorf("refusing to clone: %w", verifyErr)
 	}
 	if verifyErr != nil || !known {
-		return fmt.Errorf("host key for %s is not yet trusted; run 'test-ssh %s' first and confirm the fingerprint", host, host)
+		return fmt.Errorf("host key for %s is not yet trusted; run 'test-ssh %s' first and confirm the fingerprint", hostport, hostport)
 	}
 
 	if err := a.cloneOrReuse(url, dir); err != nil {
@@ -1505,14 +1508,14 @@ func wipeKeyBlobs(blobs []keyBlob) {
 	}
 }
 
-// CloneHostport extracts the host:22 hostport for a git SSH URL so the host
-// key can be checked and trusted before cloning.
+// CloneHostport extracts the host:port a git SSH URL is reached on, so the
+// host key can be checked and trusted before cloning.
 func (a *App) CloneHostport(url string) (string, error) {
-	host := gitHostFromURL(url)
-	if host == "" {
+	hostport := gitHostPortFromURL(url)
+	if hostport == "" {
 		return "", fmt.Errorf("cannot determine SSH host from %q", url)
 	}
-	return host + ":22", nil
+	return hostport, nil
 }
 
 func (a *App) defaultCloneDir(url string) string {
@@ -1527,18 +1530,43 @@ func (a *App) defaultCloneDir(url string) string {
 
 var scpLike = regexp.MustCompile(`^([^@]+)@([^:]+):(.+)$`)
 
+// gitHostPortFromURL returns the host:port a git SSH URL is reached on: the
+// port from the URL when it carries one, otherwise 22. The scp-like form
+// (git@host:path) cannot express a port, so its colon starts the path. An
+// empty result means no host could be read out of the URL.
+//
+// Trust is keyed on host:port, so the port has to survive: a key confirmed for
+// github.com:22 says nothing about the same host on another port.
+func gitHostPortFromURL(url string) string {
+	host := gitHostFromURL(url)
+	if host == "" {
+		return ""
+	}
+	return sshx.HostPortKey(host)
+}
+
+// gitHostFromURL returns the host a git URL is reached on, with the port when
+// the URL carries one. The scp-like form (git@host:path) has no port: there
+// the colon starts the path.
 func gitHostFromURL(url string) string {
+	// ssh://[user@]host[:port]/path carries a port, so only the user and the
+	// path are stripped.
+	if s, ok := strings.CutPrefix(url, "ssh://"); ok {
+		return trimGitAuthority(s)
+	}
 	if m := scpLike.FindStringSubmatch(url); m != nil {
 		return m[2]
 	}
-	s := strings.TrimPrefix(url, "ssh://")
+	return trimGitAuthority(url)
+}
+
+// trimGitAuthority strips an optional "user@" prefix and the path from a URL
+// authority, leaving host or host:port.
+func trimGitAuthority(s string) string {
 	if i := strings.LastIndex(s, "@"); i >= 0 {
 		s = s[i+1:]
 	}
 	if i := strings.Index(s, "/"); i >= 0 {
-		s = s[:i]
-	}
-	if i := strings.Index(s, ":"); i >= 0 {
 		s = s[:i]
 	}
 	return s
@@ -1549,8 +1577,7 @@ func knownHostTrusted(known *sshx.KnownHostsStore, hostport string) (bool, error
 	if err != nil {
 		return false, err
 	}
-	host := sshx.NormalizeHost(hostport)
-	verifyErr := known.Verify(host, pub)
+	verifyErr := known.Verify(hostport, pub)
 	if verifyErr == nil {
 		return true, nil
 	}

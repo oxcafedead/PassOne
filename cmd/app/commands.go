@@ -165,7 +165,13 @@ func cmdClone(e *env, args []string) error {
 	if err := ensureUnlocked(e); err != nil {
 		return err
 	}
-	if err := ensureHostTrusted(e, hostportOf(gitHost(url))); err != nil {
+	// The URL decides the port, and trust is per port, so let the app parse it:
+	// the same host:port CloneStore will connect to is the one that gets probed.
+	hostport, err := e.app.CloneHostport(url)
+	if err != nil {
+		return err
+	}
+	if err := ensureHostTrusted(e, hostport); err != nil {
 		return err
 	}
 	if err := e.app.CloneStore(url, dir); err != nil {
@@ -184,7 +190,7 @@ func cmdTestSSH(e *env, args []string) error {
 	if err := ensureSSHUnlocked(e); err != nil {
 		return err
 	}
-	if err := ensureHostTrusted(e, sshx.NormalizeHost(hostport)); err != nil {
+	if err := ensureHostTrusted(e, hostport); err != nil {
 		return err
 	}
 	e.printf("Authenticating to %s ...\n", hostport)
@@ -581,11 +587,11 @@ func readPassphrase(e *env, prompt string) []byte {
 
 // ensureHostTrusted captures the host key, prompting the user on first contact.
 func ensureHostTrusted(e *env, hostport string) error {
-	pub, known, err := e.app.HostCheck(hostportOf(hostport))
-	if err != nil && strings.Contains(err.Error(), "host key changed") {
-		return fmt.Errorf("SSH host key CHANGED for %s - possible man-in-the-middle; not trusting automatically", sshx.NormalizeHost(hostport))
-	}
+	pub, known, err := e.app.HostCheck(hostport)
 	if err != nil {
+		if errors.Is(err, sshx.ErrHostKeyChanged) {
+			return fmt.Errorf("possible man-in-the-middle on %s, not trusting automatically: %w", sshx.NormalizeHost(hostport), err)
+		}
 		return err
 	}
 	if known {
@@ -625,19 +631,6 @@ func hostportOf(host string) string {
 		return host
 	}
 	return host + ":22"
-}
-
-func gitHost(url string) string {
-	if i := strings.LastIndex(url, "@"); i >= 0 {
-		rest := url[i+1:]
-		for _, split := range []string{":", "/"} {
-			if j := strings.Index(rest, split); j >= 0 {
-				return rest[:j]
-			}
-		}
-		return rest
-	}
-	return url
 }
 
 func printKeyInfos(e *env, infos []*pgp.KeyInfo) {

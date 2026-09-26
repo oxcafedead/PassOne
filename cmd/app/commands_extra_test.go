@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/oxcafedead/passone/internal/app"
+	"github.com/oxcafedead/passone/internal/sshx"
 	"github.com/oxcafedead/passone/internal/store"
 	"golang.org/x/crypto/ssh"
 )
@@ -578,6 +581,105 @@ func TestCmdKnownHosts(t *testing.T) {
 	})
 }
 
+func TestEnsureHostTrustedUnreachable(t *testing.T) {
+	e := newTestEnv(t)
+	err := ensureHostTrusted(e, "127.0.0.1:1")
+	if err == nil {
+		t.Fatal("expected ensureHostTrusted to fail for an unreachable host")
+	}
+	if hosts := e.app.KnownHostsList(); len(hosts) != 0 {
+		t.Fatalf("KnownHostsList = %v, want nothing trusted", hosts)
+	}
+}
+
+// TestCmdTestSSHKeepsPort pins that the port the user typed reaches the host
+// check. Trust is keyed on host:port, so probing "127.0.0.1" instead of
+// "127.0.0.1:1" would check, and later record, a different host.
+func TestCmdTestSSHKeepsPort(t *testing.T) {
+	e := newTestEnv(t, testLockPass+"\n")
+	if _, err := e.app.ImportSSHKey(sshTestKey(t), nil, []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	err := cmdTestSSH(e, []string{"127.0.0.1:1"})
+	if err == nil {
+		t.Fatal("expected cmdTestSSH to fail for an unreachable host")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Fatalf("error = %v, want the requested host:port", err)
+	}
+}
+
+func TestEnsureHostTrustedChangedKey(t *testing.T) {
+	e := newTestEnv(t)
+	hostport, _ := startTestSSHHost(t)
+	// Trust a key the server does not present, as a previous run would have.
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.app.TrustHost(hostport, signer.PublicKey()); err != nil {
+		t.Fatalf("TrustHost: %v", err)
+	}
+
+	err = ensureHostTrusted(e, hostport)
+	if err == nil {
+		t.Fatal("expected ensureHostTrusted to refuse a changed host key")
+	}
+	if !errors.Is(err, sshx.ErrHostKeyChanged) {
+		t.Fatalf("error = %v, want it to wrap sshx.ErrHostKeyChanged", err)
+	}
+	if !strings.Contains(err.Error(), "man-in-the-middle") {
+		t.Fatalf("error = %v, want a man-in-the-middle warning", err)
+	}
+	// The trusted key is untouched.
+	if hosts := e.app.KnownHostsList(); len(hosts) != 1 ||
+		!strings.Contains(hosts[0], ssh.FingerprintSHA256(signer.PublicKey())) {
+		t.Fatalf("KnownHostsList = %v", hosts)
+	}
+}
+
+// startTestSSHHost starts an in-process SSH server with a fresh host key. It
+// serves nothing: the host key is captured during the handshake, which is all
+// the trust flow needs.
+func startTestSSHHost(t *testing.T) (hostport string, hostKey ssh.PublicKey) {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// NoClientAuth: the host key is captured during the handshake, before any
+	// authentication, and a ServerConfig without an auth callback refuses to
+	// start a handshake at all.
+	cfg := &ssh.ServerConfig{NoClientAuth: true}
+	cfg.AddHostKey(signer)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				_, _, _, _ = ssh.NewServerConn(conn, cfg)
+				_ = conn.Close()
+			}()
+		}
+	}()
+	return listener.Addr().String(), signer.PublicKey()
+}
+
 func TestCmdPublicKey(t *testing.T) {
 	t.Run("locked", func(t *testing.T) {
 		e := newTestEnv(t)
@@ -847,9 +949,22 @@ func TestUnlockPrompt(t *testing.T) {
 	}
 }
 
-func TestGitHostNoPortOrPath(t *testing.T) {
-	if got := gitHost("git@github.com"); got != "github.com" {
-		t.Fatalf("gitHost = %q", got)
+// TestCmdCloneKeepsURLPort pins that the port in the URL reaches the host-key
+// check. Trust is keyed on host:port, so probing the default port for a remote
+// that lives on another one would check, and later record, a different host.
+func TestCmdCloneKeepsURLPort(t *testing.T) {
+	e := newTestEnv(t)
+	_ = setupStore(t, e)
+	unlockPGP(t, e)
+	err := cmdClone(e, []string{"ssh://git@127.0.0.1:1/user/pass.git"})
+	if err == nil {
+		t.Fatal("expected cmdClone to fail for an unreachable host")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Fatalf("error = %v, want the URL's host:port", err)
+	}
+	if hosts := e.app.KnownHostsList(); len(hosts) != 0 {
+		t.Fatalf("KnownHostsList = %v, want nothing trusted", hosts)
 	}
 }
 

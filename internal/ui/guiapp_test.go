@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
+	"github.com/oxcafedead/passone/internal/sshx"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -253,6 +255,69 @@ func TestKnownHosts(t *testing.T) {
 	if hosts := g.KnownHosts(); len(hosts) != 0 {
 		t.Fatalf("KnownHosts = %v", hosts)
 	}
+}
+
+// TestTrustHostStoresTheProbedKey covers the time-of-check/time-of-use hole:
+// the key written to known_hosts has to be the one PrepareClone showed the
+// user, so TrustHost must not ask the server a second time. The host here is
+// unreachable, so any second probe fails the test.
+func TestTrustHostStoresTheProbedKey(t *testing.T) {
+	g := newTestGUI(t)
+	const hostport = "127.0.0.1:1"
+
+	key := testHostKey(t)
+	g.rememberProbed(hostport, key)
+	if err := g.TrustHost(hostport); err != nil {
+		t.Fatalf("TrustHost: %v", err)
+	}
+	hosts := g.KnownHosts()
+	if len(hosts) != 1 {
+		t.Fatalf("KnownHosts = %v", hosts)
+	}
+	if !strings.Contains(hosts[0], ssh.FingerprintSHA256(key)) {
+		t.Fatalf("KnownHosts = %v, want the probed key %s", hosts[0], ssh.FingerprintSHA256(key))
+	}
+
+	// A later probe replaces the pending key: what gets stored is the key on
+	// screen, not the first one ever seen for the host.
+	other := testHostKey(t)
+	g.rememberProbed(hostport, other)
+	if err := g.TrustHost(hostport); !errors.Is(err, sshx.ErrHostKeyChanged) {
+		t.Fatalf("expected ErrHostKeyChanged when a probed key differs, got %v", err)
+	}
+	hosts = g.KnownHosts()
+	if len(hosts) != 1 || !strings.Contains(hosts[0], ssh.FingerprintSHA256(key)) {
+		t.Fatalf("KnownHosts = %v, want only the first confirmed key", hosts)
+	}
+}
+
+// TestTrustHostNeedsAConfirmation guards against a silent fallback to a fresh
+// probe: with nothing on screen, trusting must fail instead of connecting.
+func TestTrustHostNeedsAConfirmation(t *testing.T) {
+	g := newTestGUI(t)
+	err := g.TrustHost("127.0.0.1:1")
+	if err == nil {
+		t.Fatal("expected TrustHost without a probed key to fail")
+	}
+	if !strings.Contains(err.Error(), "no host key confirmed") {
+		t.Fatalf("error = %v, want a missing-confirmation error", err)
+	}
+	if hosts := g.KnownHosts(); len(hosts) != 0 {
+		t.Fatalf("KnownHosts = %v", hosts)
+	}
+}
+
+func testHostKey(t *testing.T) ssh.PublicKey {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer.PublicKey()
 }
 
 func TestStoredStores(t *testing.T) {

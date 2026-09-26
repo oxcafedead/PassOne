@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"sort"
@@ -13,14 +14,17 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Sentinel errors for the application-specific host-key store.
+// Sentinel errors for the application-specific host-key store. Callers must
+// match them with errors.Is: Verify wraps ErrHostKeyChanged with the stored
+// and presented fingerprints, so the error text is not a stable contract.
 var (
 	ErrUnknownHostKey = errors.New("unknown SSH host key for this host")
-	ErrHostKeyChanged = errors.New("SSH host key changed for this host")
+	ErrHostKeyChanged = errors.New("SSH host key changed")
 )
 
 // KnownHostsStore is the application's own known_hosts database. It is
-// independent of the user's OpenSSH ~/.ssh/known_hosts.
+// independent of the user's OpenSSH ~/.ssh/known_hosts. Records are keyed on
+// HostPortKey (host:port), so trust never leaks between ports of one host.
 type KnownHostsStore struct {
 	path  string
 	lines []string
@@ -51,7 +55,8 @@ func NewKnownHostsStore(path string) (*KnownHostsStore, error) {
 	return k, nil
 }
 
-// NormalizeHost lowercases a hostname and strips a port if present.
+// NormalizeHost lowercases a hostname and strips a port if present. It is the
+// display form of a host; trust is keyed on HostPortKey, which keeps the port.
 func NormalizeHost(host string) string {
 	host = strings.TrimSpace(host)
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -60,15 +65,42 @@ func NormalizeHost(host string) string {
 	return strings.ToLower(host)
 }
 
-// Verify checks that the presented host key matches the stored one.
-func (k *KnownHostsStore) Verify(host string, key ssh.PublicKey) error {
-	host = NormalizeHost(host)
+// HostPortKey returns the canonical store key for a host: a lowercased
+// host:port pair with the port defaulting to 22, the same shape OpenSSH writes
+// to known_hosts. Trust is per port, so a key confirmed on :22 says nothing
+// about the same host reached on another port.
+func HostPortKey(hostport string) string {
+	hostport = strings.TrimSpace(hostport)
+	h, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		h, port = hostport, defaultSSHPort
+	}
+	if port == "" {
+		port = defaultSSHPort
+	}
+	return net.JoinHostPort(strings.ToLower(h), port)
+}
+
+const defaultSSHPort = "22"
+
+// Verify checks the presented host key against every key stored for the host.
+// A host may legitimately publish more than one key (several algorithms), so a
+// match against any record for the host counts as verified and only a host
+// that has records but none matching is reported as changed. Records written
+// by older versions carry a bare host and are read as the default port, so an
+// existing known_hosts file keeps working.
+func (k *KnownHostsStore) Verify(hostport string, key ssh.PublicKey) error {
+	if key == nil {
+		return errors.New("sshx: no host key presented")
+	}
+	host := HostPortKey(hostport)
+	var stored []ssh.PublicKey
 	for _, line := range k.lines {
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
 			continue
 		}
-		if fields[0] != host {
+		if HostPortKey(fields[0]) != host {
 			continue
 		}
 		expected, err := parseStoredKey(fields[1:])
@@ -78,17 +110,34 @@ func (k *KnownHostsStore) Verify(host string, key ssh.PublicKey) error {
 		if bytes.Equal(expected.Marshal(), key.Marshal()) {
 			return nil
 		}
-		return ErrHostKeyChanged
+		stored = append(stored, expected)
+	}
+	if len(stored) > 0 {
+		return fmt.Errorf("%w: %s is trusted with %s but the server presented %s",
+			ErrHostKeyChanged, host, fingerprints(stored), ssh.FingerprintSHA256(key))
 	}
 	return ErrUnknownHostKey
 }
 
-// Add stores a host key and persists the store.
-func (k *KnownHostsStore) Add(host string, key ssh.PublicKey) error {
-	host = NormalizeHost(host)
-	if err := k.Verify(host, key); err == nil {
+// Add records a host key and persists the store. It is the only writer, so the
+// trust invariant lives here: a host that is already trusted keeps the key it
+// has, and a different key is refused with ErrHostKeyChanged instead of
+// replacing it. Callers must confirm the key with the user out of band.
+func (k *KnownHostsStore) Add(hostport string, key ssh.PublicKey) error {
+	if key == nil {
+		return errors.New("sshx: no host key to store")
+	}
+	host := HostPortKey(hostport)
+	err := k.Verify(hostport, key)
+	if err == nil {
 		return nil
 	}
+	if !errors.Is(err, ErrUnknownHostKey) {
+		// ErrHostKeyChanged, or anything a future Verify may add: a host that
+		// is not new never gets its key replaced here.
+		return err
+	}
+	// First contact with this host:port, so record the key.
 	k.lines = append(k.lines, recordLine(host, key))
 	k.sortLines()
 	data := bytes.Join([][]byte{[]byte(strings.Join(k.lines, "\n"))}, []byte("\n"))
@@ -105,7 +154,7 @@ func (k *KnownHostsStore) Add(host string, key ssh.PublicKey) error {
 	return nil
 }
 
-// List returns entries "host keytype SHA256:<fingerprint>".
+// List returns entries "host:port keytype SHA256:<fingerprint>".
 func (k *KnownHostsStore) List() []string {
 	out := make([]string, 0, len(k.lines))
 	for _, line := range k.lines {
@@ -140,6 +189,16 @@ func HostKeyFingerprint(key ssh.PublicKey) string {
 // KeyAlgorithm returns the key algorithm name (e.g. ssh-ed25519).
 func KeyAlgorithm(key ssh.PublicKey) string {
 	return key.Type()
+}
+
+// fingerprints renders stored keys for a change report, e.g.
+// "SHA256:aaa..., SHA256:bbb...".
+func fingerprints(keys []ssh.PublicKey) string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, ssh.FingerprintSHA256(k))
+	}
+	return strings.Join(out, ", ")
 }
 
 func recordLine(host string, key ssh.PublicKey) string {

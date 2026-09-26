@@ -95,7 +95,7 @@ Data is stored in `%LOCALAPPDATA%\PassOne` by default. You can override this wit
 
 - **Key storage:** private keys are stored encrypted (AES-256-GCM) in `%LOCALAPPDATA%\PassOne`. The sealing key is protected by Windows DPAPI for the current user.
 - **Memory:** decrypted keys exist in memory only during an unlocked session. They are dropped on lock or idle timeout, with best-effort buffer zeroing.
-- **Host verification:** SSH host keys are captured on first contact and stored; if a host key changes, the connection is refused.
+- **Host verification:** SSH host keys are captured on first contact and stored per `host:port`; the key that gets stored is the one whose fingerprint you confirmed, and if a host key changes the connection is refused.
 - **Clipboard:** copied passwords are automatically removed from the clipboard after the configured timeout.
 - **Atomic writes:** password files are written to a temporary file and only moved into place after encryption succeeds.
 

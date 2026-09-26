@@ -35,19 +35,6 @@ func TestHostportOf(t *testing.T) {
 	}
 }
 
-func TestGitHost(t *testing.T) {
-	cases := map[string]string{
-		"git@github.com:oxcafedead/pass.git":       "github.com",
-		"ssh://git@github.com/oxcafedead/pass.git": "github.com",
-		"https://github.com/oxcafedead/pass.git":   "https://github.com/oxcafedead/pass.git", // unsupported form, returned verbatim
-	}
-	for in, want := range cases {
-		if got := gitHost(in); got != want {
-			t.Errorf("gitHost(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestHasFlag(t *testing.T) {
 	if !hasFlag([]string{"--full", "path"}, "full") {
 		t.Fatal("expected --full to match")
