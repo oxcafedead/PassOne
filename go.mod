@@ -3,7 +3,7 @@ module github.com/oxcafedead/passone
 go 1.26.7
 
 require (
-	github.com/ProtonMail/go-crypto v1.4.1
+	github.com/ProtonMail/go-crypto v1.5.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/getlantern/golog v0.0.0-20190830074920-4ef2e798c2d7
 	github.com/getlantern/systray v1.2.2
