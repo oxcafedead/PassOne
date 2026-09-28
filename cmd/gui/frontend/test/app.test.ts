@@ -283,6 +283,56 @@ describe('delete', () => {
   })
 })
 
+describe('entry tree indent', () => {
+  // style-src 'self' forbids an inline style, so tree depth is a class per step
+  // (.tree-d0 … .tree-d12) rather than a computed padding-left. The regression
+  // this guards: writing the class as
+  //
+  //   class={selected ? 'row row-active {indentClass(depth)}' : 'row {indentClass(depth)}'}
+  //
+  // looks interpolated but is not - Svelte only interpolates {placeholders} in
+  // quoted attribute *text*, so the string reached the DOM verbatim and leaf
+  // rows rendered flush left. Nothing warns about it, so the assertions below
+  // check the DOM the way a user sees it.
+  it('indents leaf and folder rows by depth with a real class', async () => {
+    vault('github/personal')
+    render(App)
+
+    const leaf = await screen.findByTitle('github/personal')
+    const folder = screen.getByText('github').closest('button')
+    if (!folder) {
+      throw new Error('the folder row is not a button')
+    }
+    expect(folder.className).toContain('tree-d0')
+    expect(leaf.className).toContain('tree-d1')
+    for (const row of [folder, leaf]) {
+      expect(row.className).not.toContain('{')
+      expect(row.getAttribute('style')).toBeNull()
+    }
+  })
+
+  it('clamps a deeply nested entry to the last indent step', async () => {
+    const deep = 'a/b/c/d/e/f/g/h/i/j/k/l/m/n'
+    vault(deep)
+    render(App)
+
+    const leaf = await screen.findByTitle(deep)
+    expect(leaf.className).toContain('tree-d12')
+  })
+
+  it('keeps the active row highlighted without losing the indent class', async () => {
+    vault('github/personal')
+    render(App)
+
+    const leaf = await screen.findByTitle('github/personal')
+    expect(leaf.className).not.toContain('entry-row-active')
+    await fireEvent.click(leaf)
+
+    await waitFor(() => expect(leaf.className).toContain('entry-row-active'))
+    expect(leaf.className).toContain('tree-d1')
+  })
+})
+
 describe('auto-lock', () => {
   it('returns to the lock screen and drops the decrypted detail', async () => {
     vault()

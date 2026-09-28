@@ -243,6 +243,16 @@ let lockPass: string = ''
     return out
   }
 
+  // Indentation is a class per depth level, not an inline padding-left: the
+  // CSP sets style-src 'self', so a style attribute is dropped by the webview.
+  // style.css defines .tree-d0 .. .tree-d12 at 14px per level; anything deeper
+  // shares the last step.
+  const maxIndentDepth = 12
+
+  function indentClass(depth: number): string {
+    return 'tree-d' + Math.min(depth, maxIndentDepth)
+  }
+
   function expandAll(nodes: Node[]): void {
     const dirs: string[] = []
     const collect = (ns: Node[]): void => {
@@ -1153,8 +1163,7 @@ let lockPass: string = ''
                 <li>
                   <button
                     on:click={() => toggleDir(row.node.path)}
-                    style="padding-left: {8 + row.depth * 14}px;"
-                    class="entry-row flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm"
+                    class="entry-row {indentClass(row.depth)} flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-hidden truncate rounded-lg pr-2 py-1.5 text-left text-sm"
                   >
                     <span class="flex shrink-0 items-center justify-center">
                       <svg xmlns="http://www.w3.org/2000/svg" class="text-dim h-3 w-3 shrink-0 transition-transform duration-150 {expanded.has(row.node.path) ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -1175,10 +1184,8 @@ let lockPass: string = ''
                   <button
                     on:click={() => select(row.node.path)}
                     title={row.node.path}
-                    style="padding-left: {8 + row.depth * 14}px;"
-                    class={selected === row.node.path
-                      ? 'entry-row entry-row-active flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm'
-                      : 'entry-row flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-hidden truncate rounded-lg px-2 py-1.5 text-left text-sm'}
+                    class:entry-row-active={selected === row.node.path}
+                    class="entry-row {indentClass(row.depth)} flex w-full min-w-0 flex-nowrap items-center gap-1 overflow-hidden truncate rounded-lg pr-2 py-1.5 text-left text-sm"
                   >
                     <span class="flex shrink-0 items-center justify-center"></span>
                     <span class="flex shrink-0 items-center justify-center">
@@ -1334,7 +1341,7 @@ let lockPass: string = ''
   </main>
 
   {#if editing}
-    <div class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.45)">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
       <form class="panel ring-panel flex w-full max-w-md flex-col gap-3 rounded-xl p-4" on:submit|preventDefault={submitEdit}>
         <h3 class="text-main text-sm font-semibold">
           {editing.mode === 'add' ? 'Add entry' : 'Edit entry'}
@@ -1422,7 +1429,7 @@ let lockPass: string = ''
 {/if}
 
 {#if settingsOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.45)">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
     <div class="panel ring-panel flex max-h-full w-full max-w-2xl flex-col gap-4 overflow-y-auto rounded-xl p-5">
       <div class="flex items-center gap-2">
         <h3 class="text-main flex-1 text-sm font-semibold">

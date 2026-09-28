@@ -12,8 +12,10 @@
 // ChangeLockPassword), so any script running in it owns the vault. Svelte
 // escapes every interpolation, which is why the app is safe by default, but
 // that safety lives in a convention nobody can see. This tool fails the build
-// on `{@html}`, on the DOM/eval sinks that bypass Svelte's escaping, and on a
-// frontend whose index.html has lost its Content-Security-Policy meta tag.
+// on `{@html}`, on the DOM/eval sinks that bypass Svelte's escaping, on inline
+// styles (which the policy in index.html blocks anyway, so they are a styling
+// bug with no error message), and on a frontend whose index.html has lost or
+// weakened its Content-Security-Policy meta tag.
 //
 // It is wired into `go test ./tools/checkui` (so it runs as part of the normal
 // `go test ./...` gate) rather than being a standalone CI step, so the same
@@ -54,18 +56,29 @@ const (
 	// ruleOrphanHandler fires for a function declared in the <script> block that
 	// is never referenced anywhere else in the component, so it can never run.
 	ruleOrphanHandler = "orphan-handler"
+	// ruleDeadInterpolation fires for a {placeholder} written inside a quoted
+	// string in an attribute expression. Svelte does not interpolate there, so
+	// the text reaches the DOM as part of a class name and the styling it
+	// asked for is simply absent.
+	ruleDeadInterpolation = "dead-interpolation"
 	// ruleRawHTML fires for a `{@html ...}` tag, the single Svelte construct
 	// that inserts a value into the document as markup rather than as text.
 	ruleRawHTML = "raw-html"
 	// ruleHTMLSink fires for a DOM or eval sink that parses markup or executes
 	// code, which is what turns an injection bug into script execution.
 	ruleHTMLSink = "html-sink"
+	// ruleInlineStyle fires for an inline style: a style attribute (or Svelte
+	// style: directive) in markup, or a write through the CSSOM. The shipped
+	// policy sets style-src 'self', so the webview silently drops these and
+	// the styling disappears - a failure with no error message anywhere.
+	ruleInlineStyle = "inline-style"
 	// ruleMissingCSP fires when index.html carries no Content-Security-Policy
 	// meta tag. Wails v2 has no CSP option, so that tag is the only place the
 	// renderer policy can live.
 	ruleMissingCSP = "missing-csp"
 	// ruleWeakCSP fires when a Content-Security-Policy exists but does not
-	// actually constrain script, e.g. a wildcard source or 'unsafe-inline'.
+	// actually constrain script or style, e.g. a wildcard source or
+	// 'unsafe-inline'.
 	ruleWeakCSP = "weak-csp"
 )
 
@@ -82,10 +95,12 @@ type sink struct {
 	what string
 }
 
-// sinks is the complete set of escape hatches this tool refuses to ignore. It
-// is deliberately conservative: the app has no need for any of them today, and
-// each one is a one-line change away from turning untrusted vault data into
-// code running with ShowPassword.
+// sinks is the complete set of constructs this tool refuses to ignore. The
+// markup and eval entries are deliberately conservative: the app has no need
+// for any of them today, and each one is a one-line change away from turning
+// untrusted vault data into code running with ShowPassword. The style entries
+// are not an escape hatch but the same class of problem: the shipped CSP
+// blocks them, so using one is a silent styling bug.
 var sinks = []sink{
 	{ruleHTMLSink, regexp.MustCompile(`\.(inner|outer)HTML\s*=`), "assigns parsed HTML, bypassing Svelte's escaping"},
 	{ruleHTMLSink, regexp.MustCompile(`\.insertAdjacentHTML\s*\(`), "parses its argument as HTML"},
@@ -94,6 +109,11 @@ var sinks = []sink{
 	{ruleHTMLSink, regexp.MustCompile(`\beval\s*\(`), "executes a string as code"},
 	{ruleHTMLSink, regexp.MustCompile(`new\s+Function\s*\(`), "compiles a string as code"},
 	{ruleRawHTML, regexp.MustCompile(`\{@html\b`), "{@html} renders its expression as markup instead of text"},
+	{ruleInlineStyle, regexp.MustCompile(`\.\s*style\s*=`), "assigns the whole style property"},
+	{ruleInlineStyle, regexp.MustCompile(`\.\s*style\s*\.\s*[A-Za-z_$][\w$-]*\s*=`), "writes a CSS property through the CSSOM"},
+	{ruleInlineStyle, regexp.MustCompile(`\.\s*style\s*\.\s*(setProperty|removeProperty)\s*\(`), "writes CSS through the CSSOM"},
+	{ruleInlineStyle, regexp.MustCompile(`setAttribute\s*\(\s*["'` + "`" + `]style["'` + "`" + `]`), "sets a style attribute"},
+	{ruleInlineStyle, regexp.MustCompile(`createElement\s*\(\s*["'` + "`" + `]style["'` + "`" + `]`), "creates a <style> element"},
 }
 
 func main() {
@@ -201,6 +221,26 @@ func CheckComponent(file, src string) []Finding {
 	findings := CheckSinks(file, src)
 
 	for _, tag := range scanTags(src) {
+		if isStyleAttribute(tag) {
+			if line, ok := attributeLine(src, tag, styleAttrRe); ok {
+				findings = append(findings, Finding{
+					File:    file,
+					Line:    line,
+					Rule:    ruleInlineStyle,
+					Message: fmt.Sprintf("<%s> sets an inline style; style-src 'self' makes the webview drop it with no error, so put the rule in src/style.css and use a class (suppress with a %q comment if it is deliberate)", tag.name, allowMarker),
+				})
+			}
+		}
+		// off is the offset of the dead placeholder itself, so the allow
+		// marker is read from the line the mistake is written on.
+		if off, ok := deadInterpolation(src, tag); ok && !isSuppressed(src, off) {
+			findings = append(findings, Finding{
+				File:    file,
+				Line:    lineOf(src, off),
+				Rule:    ruleDeadInterpolation,
+				Message: fmt.Sprintf("<%s> writes a {placeholder} inside a quoted string in an attribute expression, where Svelte does not interpolate; the text reaches the DOM verbatim (put the conditional in a class: directive, or build the string in the script block)", tag.name),
+			})
+		}
 		if tag.name != "button" {
 			continue
 		}
@@ -251,10 +291,12 @@ func CheckModule(file, src string) []Finding {
 	return CheckSinks(file, src)
 }
 
-// CheckSinks reports every {@html} tag and DOM/eval sink in src. The webview
-// has the whole Go bridge bound to it, so a value that reaches the DOM as
-// markup is not a rendering bug, it is vault access: the injected script can
-// call ShowPassword, read the clipboard or rewrite the lock password.
+// CheckSinks reports every {@html} tag, DOM/eval sink and inline-style write in
+// src. The webview has the whole Go bridge bound to it, so a value that
+// reaches the DOM as markup is not a rendering bug, it is vault access: the
+// injected script can call ShowPassword, read the clipboard or rewrite the lock
+// password. An inline style is the milder version of the same mistake - the
+// policy silently drops it, so the styling is lost with no error to find.
 func CheckSinks(file, src string) []Finding {
 	var findings []Finding
 	type lineRule struct {
@@ -274,11 +316,18 @@ func CheckSinks(file, src string) []Finding {
 			if isSuppressed(src, m[0]) {
 				continue
 			}
+			// Why the construct matters is not the same for every rule: markup
+			// sinks are vault access, an inline style is a styling bug the
+			// webview drops without a word.
+			why := "the webview is bound to ShowPassword/ChangeLockPassword, so this turns injected data into vault access"
+			if s.rule == ruleInlineStyle {
+				why = "style-src 'self' makes the webview drop this with no error, so the styling is silently lost"
+			}
 			findings = append(findings, Finding{
 				File:    file,
 				Line:    key.line,
 				Rule:    s.rule,
-				Message: fmt.Sprintf("%s; the webview is bound to ShowPassword/ChangeLockPassword, so this turns injected data into vault access (suppress with a %q comment if it is deliberate)", s.what, allowMarker),
+				Message: fmt.Sprintf("%s; %s (suppress with a %q comment if it is deliberate)", s.what, why, allowMarker),
 			})
 		}
 	}
@@ -387,10 +436,7 @@ func CheckIndexHTML(path string) ([]Finding, error) {
 	}
 	// script-src falls back to default-src, so an 'unsafe-inline' in either
 	// place re-opens inline script execution.
-	script := directives["script-src"]
-	if _, ok := directives["script-src"]; !ok {
-		script = def
-	}
+	script := firstDirective(directives, []string{"script-src"})
 	for _, expr := range script {
 		switch strings.ToLower(expr) {
 		case "*":
@@ -405,7 +451,54 @@ func CheckIndexHTML(path string) ([]Finding, error) {
 			})
 		}
 	}
+
+	// style-src has the same problem for style: 'unsafe-inline' lets injected
+	// markup restyle the app, and a full-screen overlay over the entry list is
+	// all it takes to aim a click at the wrong row. The build ships one linked
+	// stylesheet, so nothing in this app needs it. style-src-attr and
+	// style-src-elem narrow the rule for attributes and <style> elements
+	// respectively, so an 'unsafe-inline' in either of them counts too; the
+	// first chain that resolves to one is reported, because one relaxed style
+	// directive is one problem however many names inherit it.
+	for _, chain := range [][]string{
+		{"style-src"},
+		{"style-src-attr", "style-src"},
+		{"style-src-elem", "style-src"},
+	} {
+		if !allowsUnsafeInline(firstDirective(directives, chain)) {
+			continue
+		}
+		findings = append(findings, Finding{
+			File: rel, Line: line, Rule: ruleWeakCSP,
+			Message: chain[0] + " allows 'unsafe-inline', so injected markup can restyle the vault UI (a full-screen overlay is enough to aim a click at the wrong row); ship the rule in src/style.css instead",
+		})
+		break
+	}
 	return findings, nil
+}
+
+// firstDirective resolves a CSP inheritance chain: the source expressions of
+// the first directive in the chain that the policy names, or of default-src if
+// it names none of them. style-src-attr and style-src-elem fall back to
+// style-src; every directive falls back to default-src.
+func firstDirective(directives map[string][]string, chain []string) []string {
+	for _, name := range chain {
+		if exprs, ok := directives[name]; ok {
+			return exprs
+		}
+	}
+	return directives["default-src"]
+}
+
+// allowsUnsafeInline reports whether a directive's source expressions permit
+// inline style or script.
+func allowsUnsafeInline(exprs []string) bool {
+	for _, expr := range exprs {
+		if strings.EqualFold(strings.TrimSpace(expr), "'unsafe-inline'") {
+			return true
+		}
+	}
+	return false
 }
 
 // parseCSP splits a policy into directive name -> source expressions.
@@ -426,13 +519,21 @@ func parseCSP(policy string) map[string][]string {
 type tag struct {
 	name  string
 	line  int
+	start int
+	end   int
 	attrs []attr
 }
 
 // attr is a single parsed attribute on an element.
 type attr struct {
-	name  string
+	name string
+	// value is the attribute's text: the interpolated text of a quoted
+	// attribute, or the expression source of a Svelte attribute value.
 	value string
+	// expr reports that value is an expression (class={...}) rather than
+	// quoted text, which is what decides whether a {placeholder} in it
+	// interpolates or reaches the DOM verbatim.
+	expr bool
 }
 
 // scanTags finds every element open tag in src. It is a small hand-rolled
@@ -461,6 +562,8 @@ func scanTags(src string) []tag {
 		tags = append(tags, tag{
 			name:  src[i+1 : j],
 			line:  lineOf(src, i),
+			start: i,
+			end:   end,
 			attrs: parseAttrs(src[j:end]),
 		})
 		// Continue scanning right after this tag's attributes. Nested markup is
@@ -550,6 +653,7 @@ func parseAttrs(raw string) []attr {
 				i++
 			}
 			if i < len(raw) {
+				attr.expr = raw[i] == '{'
 				var value string
 				value, i = scanAttrValue(raw, i)
 				attr.value = value
@@ -627,6 +731,124 @@ func isSubmitButton(attrs []attr) bool {
 		}
 	}
 	return false
+}
+
+// isStyleAttribute reports whether the tag carries an inline style: either the
+// style attribute itself or one of Svelte's `style:property` directives, both
+// of which the compiler renders into a style attribute on the element. A
+// stylesheet rule is unaffected: Svelte extracts component CSS into the build's
+// stylesheet, so a <style> block stays a same-origin CSS file.
+func isStyleAttribute(tag tag) bool {
+	for _, a := range tag.attrs {
+		name := strings.ToLower(a.name)
+		if name == "style" || strings.HasPrefix(name, "style:") {
+			return true
+		}
+	}
+	return false
+}
+
+// styleAttrRe finds the style attribute (or style: directive) inside a tag's
+// attribute section. The leading separator is required so that a class named
+// `style-guide` is not mistaken for the attribute itself.
+var styleAttrRe = regexp.MustCompile(`(?i)(^|[\s/])style(:[A-Za-z-]+)?\s*=`)
+
+// attributeRe builds a matcher for the named attribute inside a tag's
+// attribute section. The leading separator is required so that an attribute
+// whose name is a suffix of another (class vs. class:foo) is not matched by
+// accident, and the `=` so that the match stops at the value.
+func attributeRe(name string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)(^|[\s/])` + regexp.QuoteMeta(name) + `\s*=`)
+}
+
+// attributeLine returns the line the attribute matched by re is written on -
+// not the line the tag opens on, since a multi-line tag is the normal way to
+// write Svelte markup - and reports false when that line carries checkui:allow.
+func attributeLine(src string, tag tag, re *regexp.Regexp) (int, bool) {
+	at, ok := attributeOffset(src, tag, re)
+	if !ok {
+		// Unreachable while the caller agreed with the pattern, but a finding
+		// at the wrong line is worse than one at the tag's own line.
+		at = tag.start
+	}
+	if isSuppressed(src, at) {
+		return 0, false
+	}
+	return lineOf(src, at), true
+}
+
+// attributeOffset returns the offset in src of the attribute re matches, or
+// false when the tag has no such attribute.
+func attributeOffset(src string, tag tag, re *regexp.Regexp) (int, bool) {
+	loc := re.FindStringIndex(src[tag.start:tag.end])
+	if loc == nil {
+		return 0, false
+	}
+	return tag.start + loc[0], true
+}
+
+// deadInterpolation finds a {placeholder} written inside a quoted string of an
+// attribute expression, as in
+//
+//	class={cond ? 'row {indent()}' : 'row'}
+//
+// Svelte interpolates {placeholders} in quoted attribute *text* but not in a
+// string literal inside an expression, so that text reaches the DOM verbatim:
+// the row renders with a class literally called "{indent()}" and none of the
+// styling it asked for. It is the same defect the tree-indent regression had,
+// and nothing about it fails to compile or render.
+func deadInterpolation(src string, tag tag) (int, bool) {
+	for _, a := range tag.attrs {
+		if !a.expr || isFunctionAttribute(a.name) {
+			continue
+		}
+		off, ok := placeholderInString(a.value)
+		if !ok {
+			continue
+		}
+		at, _ := attributeOffset(src, tag, attributeRe(a.name))
+		return at + off, true
+	}
+	return 0, false
+}
+
+// isFunctionAttribute reports whether the attribute takes a function or a
+// directive rather than text, so a string literal in it is an argument and its
+// braces are the argument's business.
+func isFunctionAttribute(name string) bool {
+	name = strings.ToLower(name)
+	return strings.HasPrefix(name, "on") ||
+		strings.HasPrefix(name, "bind") ||
+		strings.HasPrefix(name, "use") ||
+		strings.HasPrefix(name, "in:") ||
+		strings.HasPrefix(name, "out:") ||
+		strings.HasPrefix(name, "transition:") ||
+		strings.HasPrefix(name, "animate:")
+}
+
+// placeholderInString returns the offset of the first { that sits inside a
+// quoted string in value, and false when there is none. A value that contains a
+// template literal is skipped: a backtick delimits a string too, but ${...}
+// inside one is real interpolation and the quoting around it cannot be tracked
+// with a one-pass scan.
+func placeholderInString(value string) (int, bool) {
+	if strings.ContainsRune(value, '`') {
+		return 0, false
+	}
+	quote := byte(0)
+	for i := 0; i < len(value); i++ {
+		switch c := value[i]; {
+		case c == '\\' && quote != 0:
+			i++
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote = c
+		case c == quote:
+			quote = 0
+		case c == '{' && quote != 0:
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func isSpace(b byte) bool {

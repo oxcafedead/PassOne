@@ -25,6 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `passone:clipboard-warning` event in the GUI and stderr in the CLI. Failures on
   the timer have no caller left to return to, so they cannot travel back in
   `Copied`'s result.
+- The renderer policy allowed `'unsafe-inline'` styles (Sonar Web:S7039). It
+  re-opened the one thing the policy exists for: injected markup could restyle
+  the app, and a full-screen overlay over the entry list is all it takes to aim
+  a click at the wrong row. The build emits a single linked stylesheet, so
+  `style-src` is now `'self'`; tree indentation became `.tree-d0` … `.tree-d12`
+  and the modal scrims Tailwind's `bg-black/45`, and `tools/checkui` now fails
+  on an inline style (`inline-style`) or on `'unsafe-inline'` coming back. Only
+  `npm run dev`, where Vite injects CSS as `<style>` elements, still relaxes
+  it, and only in serve mode.
+- Tree rows lost their indent. The tree indent is a class per depth step
+  (`.tree-d0` … `.tree-d12`) rather than an inline `padding-left`, and the
+  leaf row was written as `class={sel ? 'row {indentClass(d)}' : 'row …'}` —
+  Svelte interpolates `{placeholders}` in quoted attribute *text* but not inside
+  a string literal, so the class name reached the DOM verbatim and every leaf
+  rendered flush left. `tools/checkui` now fails the build on that shape
+  (`dead-interpolation`) and the DOM tests assert the indent class is really on
+  the row.
 
 ### Added
 

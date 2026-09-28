@@ -113,9 +113,24 @@ enabled and is permanently inert — exactly how the Edit button shipped broken.
   `type="submit"`.
 - `orphan-handler` — a `function` declared in `<script>` that nothing else in
   the component references, so it can never be called.
+- `dead-interpolation` — a `{placeholder}` written inside a quoted string in an
+  attribute **expression**, as in `class={on ? 'row {indent()}' : 'row'}`. Svelte
+  interpolates in quoted attribute *text* but not in a string literal, so the
+  text reaches the DOM verbatim: the row renders with a class literally called
+  `{indent()}` and none of the styling it asked for. It compiled, it rendered,
+  and nothing warned — it shipped once, as leaf rows losing their tree indent
+  the day an inline `padding-left` became a class. A template literal is exempt
+  (`${...}` does interpolate), and a string literal passed to an event handler
+  is an argument, not a placeholder. Put the conditional in a `class:`
+  directive or build the string in the script block.
 
 Add a rule in `tools/checkui/main.go` and a case in `main_test.go` when you add
-a new interactive element class (checkbox, link, keydown-only control).
+a new interactive element class (checkbox, link, keydown-only control) or a
+new way of setting a style the policy blocks (a `style` prop on a component,
+CSS-in-JS, a helper that wraps `el.style`). Add a DOM assertion to
+`cmd/gui/frontend/test/app.test.ts` when a class you build by string is supposed
+to end up on an element: `dead-interpolation` cannot see a placeholder you built
+in the script block, and neither can the compiler.
 
 ### Renderer-escape-hatch gate (`tools/checkui`)
 
@@ -125,9 +140,14 @@ The same tool also refuses the constructs that would defeat Svelte's escaping
 - `raw-html` — a `{@html ...}` tag.
 - `html-sink` — `innerHTML`/`outerHTML`, `insertAdjacentHTML`, `srcdoc`,
   `document.write`, `eval(`, `new Function(`.
+- `inline-style` — a `style` attribute or Svelte `style:` directive in markup,
+  or an inline-style write in script (`el.style.x =`, `el.style.cssText =`,
+  `el.style.setProperty(`, `setAttribute('style'`, `createElement('style'`).
+  `style-src 'self'` makes the webview drop these **with no error message**,
+  so the rule belongs in `src/style.css` and a class belongs in the markup.
 - `missing-csp` / `weak-csp` — `index.html` has no CSP meta tag, or its policy
-  would not actually restrict scripts (no `default-src`, `*`,
-  `'unsafe-inline'`, `'unsafe-eval'`).
+  would not actually restrict scripts or styles (no `default-src`, `*`,
+  `'unsafe-inline'` in `script-src`/`style-src`, `'unsafe-eval'`).
 
 `.svelte` and `.ts`/`.js` files under `src/` are both scanned. A line that must
 name a sink without using it (prose, a reviewed exception) is suppressed with
@@ -137,7 +157,7 @@ that to smell, the answer is `textContent`, not a suppression.
 ### Content-Security-Policy (do not remove)
 
 `cmd/gui/frontend/index.html` carries
-`<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">`.
+`<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">`.
 Wails v2 has **no** CSP option (`pkg/options/options.go` and
 `pkg/options/assetserver/options.go` in v2.16.0 have no such field), so this
 meta tag is the entire renderer-side policy. `tools/checkui` fails the build
@@ -153,11 +173,28 @@ textarea), but that is a convention, not a control. CSP is the control: it is
 what turns a future `{@html}` mistake, an injected dependency or a hostile
 `.gpg` filename into a broken panel instead of total compromise.
 
+`style-src` is `'self'` with **no** `'unsafe-inline'` (Sonar Web:S7039 fires
+otherwise). The production build emits exactly one stylesheet and links it from
+`dist/index.html`, and every rule lives in `src/style.css`, so an inline style
+has no reason to exist — and the webview would drop it silently anyway. Tree
+indentation, which used to be `style="padding-left: {8 + row.depth * 14}px;"`,
+is `.tree-d0` … `.tree-d12` (clamped in `indentClass`) for the same reason;
+modal scrims are Tailwind's `bg-black/45`.
+
+`npm run dev` is the one exception, and it is dev-only. Vite serves CSS as
+JavaScript and appends `<style>` elements as modules load, which `style-src
+'self'` blocks, so `devInlineStyleCSP()` in `cmd/gui/frontend/vite.config.ts`
+rewrites `style-src` when the plugin is in `serve` mode. It rewrites rather than
+adds a second meta tag because a browser enforces **every** policy it finds:
+a second, relaxed one cannot relax the first. The built `dist/index.html` is
+generated from the checked-in `index.html` and keeps the strict policy.
+
 Notes for anyone touching the policy:
 
-- `style-src` needs `'unsafe-inline'`: Svelte injects component CSS as runtime
-  `<style>` elements. `script-src` does **not** — keep `'self'`; do not add
-  `'unsafe-eval'`, and never add `'unsafe-inline'` to `script-src`.
+- Do not add `'unsafe-inline'` or `'unsafe-hashes'` to `style-src`, `'unsafe-eval'`
+  to `script-src`, or `'unsafe-inline'` to `script-src` at all. `tools/checkui`
+  fails on each of them; if one becomes genuinely necessary, the fix belongs in
+  the app's own CSS, not in the policy.
 - `connect-src 'self'` is enough for `npm run dev`: the vite HMR socket is
   same-origin, and a `ws://` URL matches `'self'` for an `http://` page.
 - The CSP gates the document, not the Wails runtime scripts, which are injected

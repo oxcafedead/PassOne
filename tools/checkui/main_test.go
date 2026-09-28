@@ -209,6 +209,52 @@ func TestCheckSinksRawHTML(t *testing.T) {
 	}
 }
 
+// TestCheckComponentInlineStyle pins the rule that keeps the style-src side of
+// the CSP enforceable: a style attribute, a Svelte style: directive or a CSSOM
+// write is dropped by the webview with no error, so the styling just vanishes.
+func TestCheckComponentInlineStyle(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []Finding
+	}{
+		{
+			name: "a style attribute is reported",
+			src:  `<div style="padding-left: 8px"></div>`,
+			want: []Finding{{Line: 1, Rule: ruleInlineStyle}},
+		},
+		{
+			name: "a svelte style: directive is reported",
+			src:  "<button on:click={go} style:padding-left={depth * 14}>Go</button>",
+			want: []Finding{{Line: 1, Rule: ruleInlineStyle}},
+		},
+		{
+			name: "the line of the attribute is reported, not the line of the tag",
+			src:  "<button\n  on:click={go}\n  class=\"entry-row\"\n  style=\"padding-left: 8px\">Go</button>",
+			want: []Finding{{Line: 4, Rule: ruleInlineStyle}},
+		},
+		{
+			name: "a class named style-guide is not the style attribute",
+			src:  "<button\n  on:click={go}\n  class=\"style-guide\"\n  style=\"padding-left: 8px\">Go</button>",
+			want: []Finding{{Line: 4, Rule: ruleInlineStyle}},
+		},
+		{
+			name: "classes and stylesheet-driven properties are fine",
+			src:  `<button on:click={go} class="entry-row {indentClass(row.depth)} flex">Go</button>`,
+		},
+		{
+			name: "checkui:allow suppresses a deliberate style attribute",
+			src:  `<div style="height: {h}px" > <!-- checkui:allow --></div>`,
+			want: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertFindings(t, CheckComponent("App.svelte", tc.src), tc.want)
+		})
+	}
+}
+
 func TestCheckSinksDOMEval(t *testing.T) {
 	tests := []struct {
 		name string
@@ -281,6 +327,113 @@ func TestCheckSinksDOMEval(t *testing.T) {
 	}
 }
 
+// TestCheckSinksInlineStyle covers the script-side ways to set an inline style,
+// including the ones no markup scan can see.
+// TestCheckComponentDeadInterpolation pins the rule that would have caught the
+// tree-indent regression: a {placeholder} inside a quoted string in an
+// attribute expression never interpolates, so the row renders with a class
+// literally named "{indentClass(row.depth)}" and no indent at all.
+func TestCheckComponentDeadInterpolation(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []Finding
+	}{
+		{
+			name: "a placeholder in a single-quoted branch is reported at the class attribute",
+			src:  "<button\n  on:click={go}\n  class={on ? 'row {indentClass(d)}' : 'row'}>Go</button>",
+			want: []Finding{{Line: 3, Rule: ruleDeadInterpolation}},
+		},
+		{
+			name: "the same mistake in a double-quoted string is reported",
+			src:  `<div class={on ? "row {x}" : "row"}></div>`,
+			want: []Finding{{Line: 1, Rule: ruleDeadInterpolation}},
+		},
+		{
+			name: "a dead placeholder in a title is reported too",
+			src:  `<button on:click={go} title={a ? 'b {c}' : 'b'}>Go</button>`,
+			want: []Finding{{Line: 1, Rule: ruleDeadInterpolation}},
+		},
+		{
+			name: "a placeholder in quoted attribute text does interpolate",
+			src:  `<div class="row {indentClass(d)}">x</div>`,
+		},
+		{
+			name: "a template literal placeholder is real interpolation",
+			src:  "<div class={`row ${indentClass(d)}`}></div>",
+		},
+		{
+			name: "a call expression has no string to misread",
+			src:  `<div class={indentClass(d)}>x</div>`,
+		},
+		{
+			name: "a conditional with no placeholder is fine",
+			src:  "<button on:click={go} class={on ? 'row row-active' : 'row'}>Go</button>",
+		},
+		{
+			name: "a string argument to a handler is not a dead placeholder",
+			src:  "<button on:click={() => select('{name}')}>Go</button>",
+		},
+		{
+			name: "checkui:allow suppresses it",
+			src:  "<div class={on ? 'row {x}' : 'row'}>y</div> // checkui:allow",
+			want: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertFindings(t, CheckComponent("App.svelte", tc.src), tc.want)
+		})
+	}
+}
+
+func TestCheckSinksInlineStyle(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []Finding
+	}{
+		{
+			name: "a CSSOM property write is reported",
+			src:  "  row.style.paddingLeft = '8px'",
+			want: []Finding{{Line: 1, Rule: ruleInlineStyle}},
+		},
+		{
+			name: "assigning cssText is reported",
+			src:  "  el.style.cssText = 'padding:0'",
+			want: []Finding{{Line: 1, Rule: ruleInlineStyle}},
+		},
+		{
+			name: "setAttribute('style') is reported",
+			src:  `el.setAttribute('style', 'background:red')`,
+			want: []Finding{{Line: 1, Rule: ruleInlineStyle}},
+		},
+		{
+			name: "createElement('style') is reported",
+			src:  "  const s = document.createElement('style')",
+			want: []Finding{{Line: 1, Rule: ruleInlineStyle}},
+		},
+		{
+			name: "setting a class or a data attribute is the safe way",
+			src:  "  el.className = 'entry-row-active'\n  el.dataset.depth = String(depth)",
+		},
+		{
+			name: "a variable named style is not an inline style",
+			src:  "  const style = compute(a, b)\n  apply(style)",
+		},
+		{
+			name: "checkui:allow suppresses a deliberate CSSOM write",
+			src:  "el.style.setProperty('--x', v) // checkui:allow",
+			want: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertFindings(t, CheckModule("main.ts", tc.src), tc.want)
+		})
+	}
+}
+
 // TestCheckTreeScansModules pins down that the sink rules are not limited to
 // .svelte: a helper module is just as capable of injecting markup.
 func TestCheckTreeScansModules(t *testing.T) {
@@ -295,14 +448,14 @@ func TestCheckTreeScansModules(t *testing.T) {
 }
 
 func TestCheckIndexHTML(t *testing.T) {
-	const meta = `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"/>`
+	const meta = `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'"/>`
 	tests := []struct {
 		name string
 		html string
 		want []Finding
 	}{
 		{
-			name: "a self-only script policy is accepted",
+			name: "a self-only script and style policy is accepted",
 			html: "<html><head>" + meta + "</head><body></body></html>",
 		},
 		{
@@ -333,6 +486,33 @@ func TestCheckIndexHTML(t *testing.T) {
 			name: "a policy with no default-src is reported",
 			html: `<meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'"/>`,
 			want: []Finding{{Line: 1, Rule: ruleWeakCSP}},
+		},
+		{
+			// The reported Sonar finding: style-src 'unsafe-inline' lets
+			// injected markup restyle the app, and a full-screen overlay is
+			// all it takes to aim a click at the wrong row.
+			name: "style-src unsafe-inline is reported",
+			html: `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"/>`,
+			want: []Finding{{Line: 1, Rule: ruleWeakCSP}},
+		},
+		{
+			name: "style-src-attr unsafe-inline is reported on its own",
+			html: `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src-attr 'unsafe-inline'"/>`,
+			want: []Finding{{Line: 1, Rule: ruleWeakCSP}},
+		},
+		{
+			name: "style-src-elem unsafe-inline is reported on its own",
+			html: `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src-elem 'unsafe-inline'"/>`,
+			want: []Finding{{Line: 1, Rule: ruleWeakCSP}},
+		},
+		{
+			name: "one relaxed style directive is one finding, however many names inherit it",
+			html: `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src-attr 'unsafe-inline'; style-src-elem 'unsafe-inline'"/>`,
+			want: []Finding{{Line: 1, Rule: ruleWeakCSP}},
+		},
+		{
+			name: "an unsafe-inline no script or style directive inherits is not a finding",
+			html: `<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; script-src 'self'; style-src 'self'"/>`,
 		},
 	}
 	for _, tc := range tests {

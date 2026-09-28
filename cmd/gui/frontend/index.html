@@ -9,11 +9,20 @@
          policy is what makes a future HTML-injection mistake a broken panel
          instead of total compromise. Wails v2 has no CSP option, so this meta
          tag is the only place the policy can live; tools/checkui fails the
-         build if it disappears. style-src needs 'unsafe-inline' because Svelte
-         injects component styles at runtime; connect-src stays 'self' because
-         the vite dev server HMR socket is same-origin. Do not relax without
-         reading the CSP section of AGENTS.md. -->
-    <meta content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" http-equiv="Content-Security-Policy"/>
+         build if it disappears or weakens.
+
+         style-src stays 'self' with no 'unsafe-inline': the build emits one
+         stylesheet, linked from dist/index.html, and every rule lives in
+         src/style.css, so an inline style is a compile-time mistake rather
+         than something the policy has to tolerate. tools/checkui reports
+         inline styles (`inline-style`) and refuses 'unsafe-inline' here.
+         `npm run dev` is the one exception - vite imports CSS as JavaScript
+         and appends <style> elements at runtime - so vite.config.ts rewrites
+         style-src in serve mode only; the built app never sees that.
+         connect-src stays 'self' because the vite dev server HMR socket is
+         same-origin. Do not relax without reading the CSP section of
+         AGENTS.md. -->
+    <meta content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" http-equiv="Content-Security-Policy"/>
     <title>PassOne</title>
 </head>
 <body>

@@ -136,6 +136,24 @@ html, body, #app {
 .input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
 .input::placeholder { color: var(--placeholder); }
 
+/* Tree indentation. style-src is 'self' with no 'unsafe-inline', so a
+   depth-dependent padding-left cannot be an inline style attribute: the steps
+   are named classes instead. App.svelte clamps row.depth to the last step
+   (see indentClass), which is 8 + 12 * 14 = 176px. */
+.tree-d0 { padding-left: 8px; }
+.tree-d1 { padding-left: 22px; }
+.tree-d2 { padding-left: 36px; }
+.tree-d3 { padding-left: 50px; }
+.tree-d4 { padding-left: 64px; }
+.tree-d5 { padding-left: 78px; }
+.tree-d6 { padding-left: 92px; }
+.tree-d7 { padding-left: 106px; }
+.tree-d8 { padding-left: 120px; }
+.tree-d9 { padding-left: 134px; }
+.tree-d10 { padding-left: 148px; }
+.tree-d11 { padding-left: 162px; }
+.tree-d12 { padding-left: 176px; }
+
 .entry-row { color: var(--sub); transition: background-color 0.12s ease; }
 .entry-row:hover { background-color: var(--hover); }
 .entry-row-active { color: var(--success); background-color: var(--success-bg); }
