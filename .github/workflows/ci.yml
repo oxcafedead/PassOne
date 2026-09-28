@@ -36,6 +36,15 @@ jobs:
           npm ci
           npm run build
 
+      - name: Run frontend DOM smoke tests
+        # Mounts App.svelte in jsdom against a window.go/window.runtime stand-in
+        # and drives the real flows: unlock, reveal, edit, create, delete,
+        # auto-lock. This is the gate for a control that renders, looks enabled
+        # and is permanently inert. The real generated wailsjs modules stay in
+        # the loop; cmd/gui/binding_contract_test.go checks those against *App.
+        working-directory: cmd/gui/frontend
+        run: npm test
+
       - name: Run tests with coverage
         # Use an absolute path for the coverage profile. The relative-path form of
         # `go test -coverprofile` is unreliable on Windows: the profile is resolved

@@ -286,7 +286,15 @@ func (g *GUI) UpdatePassword(name, password, body string, keepPassword bool) (st
 	if keepPassword && body == "" {
 		return "No changes to " + name, nil
 	}
-	content := password + "\n" + body
+	// Only the body is packed when keeping the stored secret: SetPassword
+	// splices the existing first line back in front of it. Prefixing the
+	// ignored password here would leave a blank line between the secret and
+	// the body, which is what a notes-only edit from the GUI produces (the
+	// edit dialog opens blank, so an untouched password field means "keep").
+	content := body
+	if !keepPassword {
+		content = password + "\n" + body
+	}
 	packed := []byte(content)
 	defer security.Zero(packed)
 	if err := g.core.SetPassword(name, packed, keepPassword); err != nil {

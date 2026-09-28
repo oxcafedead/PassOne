@@ -17,6 +17,7 @@ Windows password manager (`passone`) backed by a self-contained OpenPGP store. I
 | `cmd/app` | CLI entrypoint and commands |
 | `cmd/gui` | Wails v2 GUI entrypoint, tray, single-instance lock |
 | `cmd/gui/frontend` | Svelte 5 + Vite + Tailwind 4 frontend |
+| `cmd/gui/frontend/test` | jsdom smoke tests for `App.svelte` (vitest) |
 | `internal/app` | Core app logic (unlock, password ops, git sync, config) |
 | `internal/ui` | Wails-specific facade over `internal/app`; frontend binds here |
 | `internal/pgp` | OpenPGP encryption/decryption (ProtonMail/go-crypto) |
@@ -42,6 +43,11 @@ go build -o passone.exe ./cmd/app
 cd cmd/gui/frontend
 npm ci
 npm run build
+cd ../../..
+
+# Frontend DOM smoke tests
+cd cmd/gui/frontend
+npm test
 cd ../../..
 
 # Full test suite (run after frontend build)
@@ -164,11 +170,52 @@ Notes for anyone touching the policy:
   dynamic markup, prefer building nodes with `textContent`/`createElement` over
   `innerHTML`; both are refused by `tools/checkui`.
 
+### Bridge-contract gate (`cmd/gui/binding_contract_test.go`)
+
+`cmd/gui` is the only package holding Wails-bound methods, and a rename there
+does not fail the Go build anywhere: the generated `wailsjs/go/main/App.js` and
+`App.d.ts` are checked in, and `App.svelte` imports them by name. So a renamed
+method compiles, ships, and leaves a button calling a name that no longer
+exists. This test reflects over `*App` and asserts:
+
+- every exported method has a matching export in `App.js` and a declaration in
+  `App.d.ts`, with the same arity;
+- declared parameter types match the Go types;
+- every name `App.svelte` imports from `App.js` actually exists there;
+- most generated bindings are still used by the UI (a low watermark catches
+  bindings orphaned by a UI rewrite without failing on legitimately
+  backend-only methods such as `Lock`, which the tray calls).
+
+Add a case here when a new interactive element class appears (checkbox, link,
+keydown-only control), alongside the matching `tools/checkui` rule.
+
+### Frontend DOM smoke tests (`cmd/gui/frontend/test`)
+
+vitest + jsdom, run by `npm test` in `cmd/gui/frontend` and as its own CI step.
+`App.svelte` is mounted in jsdom with `test/setup.ts` installing a
+`window.go.main.App` and `window.runtime` stand-in, so the **real** generated
+`wailsjs` modules resolve and every backend call is assertable with `vi.fn`.
+There is no module alias on purpose: a binding that calls the wrong `window`
+path fails here too.
+
+The tests drive the flows that have actually broken before — unlock, explicit
+reveal, notes-only edit, add, two-step delete, auto-lock — and assert the exact
+arguments sent to the bridge. That last part is the point. `Edit` sends
+`UpdatePassword(name, '', body, true)` and lets Go splice the original first
+line back in; a frontend that pre-built `"password\nnotes"` would corrupt every
+notes-only edit, and only an argument assertion catches it.
+
+`vitest.config.ts` pins `resolve.conditions: ['browser']` (Svelte's server
+entry throws on `mount`) and deliberately omits the Tailwind plugin, which has
+no named ESM export. `tsconfig.json` includes `test/**/*.ts` and
+`vitest.config.ts` so `npm run check` covers them.
+
 Recommended local order before pushing:
 
 1. `gofmt -w .`
 2. `go test ./...`
-3. `golangci-lint` (via `go run ...`)
+3. `cd cmd/gui/frontend && npm test`
+4. `golangci-lint` (via `go run ...`)
 
 ## Releases
 

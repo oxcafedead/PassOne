@@ -19,7 +19,9 @@
     "src/**/*.d.ts",
     "src/**/*.ts",
     "src/**/*.js",
-    "src/**/*.svelte"
+    "src/**/*.svelte",
+    "test/**/*.ts",
+    "vitest.config.ts"
   ],
   "references": [
     {
