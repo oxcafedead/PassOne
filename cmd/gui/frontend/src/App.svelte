@@ -1103,6 +1103,7 @@ let lockPass: string = ''
         {/if}
         <button
           on:click={refresh}
+          disabled={listing}
           title="Refresh list"
           class="btn-ghost rounded-lg px-2.5 py-2"
         >
@@ -1113,7 +1114,12 @@ let lockPass: string = ''
       </div>
 
       <nav class="flex-1 overflow-y-auto">
-        {#if listing}
+        <!-- The placeholder must never replace a populated list: this is the
+        scroll container, so blanking it collapses scrollHeight and the browser
+        clamps scrollTop to 0, throwing the user back to the top on every
+        refresh (GH #33). rows still holds the previous listing until the new
+        one lands, so it is empty only before the first list arrives. -->
+        {#if listing && rows.length === 0}
           <p class="text-faint mt-2 px-1 text-xs">Loading…</p>
         {:else if query.trim()}
           {#if filtered.length === 0}

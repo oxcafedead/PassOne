@@ -84,6 +84,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refreshing the entry list reset the sidebar to the top. `refresh()` held
+  `listing` for the whole of the `ListPasswords()` call and the template rendered
+  that state *instead of* the list, so the `<nav>` scroll container was emptied,
+  its `scrollHeight` collapsed and the browser clamped `scrollTop` to 0. The
+  placeholder now only appears while there is genuinely nothing to show yet,
+  and the list is re-rendered in place: the keyed `{#each}` keeps every surviving
+  row's DOM node, so the offset survives. This hit every refresh path, not just
+  removal (GH #33).
 - Three data races on shared `App` state, all reachable in the GUI because
   Wails dispatches every binding call on its own goroutine: `StorePath()` read
   `cfg.StorePath` unlocked while `OpenLocalStore` wrote it,

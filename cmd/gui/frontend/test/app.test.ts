@@ -45,6 +45,30 @@ function storeDir(): HTMLElement {
   return dd as HTMLElement
 }
 
+// A vault big enough that the sidebar list overflows and can actually be
+// scrolled: one folder plus one entry per index, so a row is deleted well above
+// the fold and the list stays long enough to keep the offset meaningful.
+function bigVault(count: number): string[] {
+  return Array.from({length: count}, (_, i) => `folder${i}/entry${i}`)
+}
+
+// jsdom has no layout engine, so a scrollTop set here is stored and returned
+// unchanged even after the content that justified it is removed: asserting it
+// would pass against the very bug this guards. Model the one rule that bites in
+// a real webview instead — scrollTop cannot exceed scrollHeight - clientHeight,
+// so it is clamped back when the scroller is left with less content than the
+// offset needs. Rows are a fixed height, so the row count stands in for pixels.
+const ROW_PX = 32
+
+function modelScrollClamping(nav: HTMLElement, visibleRows: number): void {
+  new MutationObserver(() => {
+    const reachable = Math.max(0, nav.querySelectorAll('li').length - visibleRows) * ROW_PX
+    if (nav.scrollTop > reachable) {
+      nav.scrollTop = reachable
+    }
+  }).observe(nav, {childList: true, subtree: true})
+}
+
 describe('lock screen', () => {
   it('shows where the store lives and calls Unlock with the typed password', async () => {
     locked()
@@ -215,6 +239,47 @@ describe('delete', () => {
     await fireEvent.click(await screen.findByRole('button', {name: 'Confirm delete?'}))
 
     await waitFor(() => expect(RemovePassword).toHaveBeenCalledWith('github/personal'))
+  })
+
+  // GH #33. A removal refreshes the list, and the refresh used to swap the whole
+  // list for a "Loading…" line. That emptied the <nav> scroll container, so its
+  // scrollHeight collapsed and the browser reset scrollTop to 0 — deleting any
+  // entry threw the user back to the top of the list.
+  it('leaves the list scrolled where it was after a removal', async () => {
+    const names = bigVault(40)
+    // A backing store, so the refresh after the removal really does come back
+    // without the deleted entry rather than replaying the same list.
+    const store = [...names]
+    IsUnlocked.mockResolvedValue(true)
+    ListPasswords.mockImplementation(async () => [...store])
+    RemovePassword.mockImplementation(async (name: string) => {
+      store.splice(store.indexOf(name), 1)
+      return 'Removed'
+    })
+    render(App)
+
+    const scroller = (await screen.findByTitle(names[0])).closest('nav')
+    if (!scroller) {
+      throw new Error('the entry list is not inside a scroll container')
+    }
+    modelScrollClamping(scroller, 12)
+    // A folder row and an entry row per vault entry, all folders expanded.
+    expect(scroller.querySelectorAll('li')).toHaveLength(names.length * 2)
+    // Six rows down, far enough to be visibly off the top and shallow enough
+    // that losing one row must not legitimately clamp it.
+    scroller.scrollTop = 6 * ROW_PX
+
+    await selectEntry(names[0])
+    await fireEvent.click(screen.getByRole('button', {name: 'Delete'}))
+    await fireEvent.click(await screen.findByRole('button', {name: 'Confirm delete?'}))
+
+    await waitFor(() => expect(RemovePassword).toHaveBeenCalledWith(names[0]))
+    await waitFor(() => expect(screen.queryByTitle(names[0])).not.toBeInTheDocument())
+    // The refresh must have re-rendered in place, not torn the list down and
+    // rebuilt it: a "Loading…" placeholder in this container reads as zero rows
+    // and the model clamps the offset away.
+    expect(scroller.querySelectorAll('li').length).toBeGreaterThan(0)
+    expect(scroller.scrollTop).toBe(6 * ROW_PX)
   })
 })
 
