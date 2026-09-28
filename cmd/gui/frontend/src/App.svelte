@@ -7,6 +7,7 @@
     ListPasswords,
     ShowPassword,
     CopyPassword,
+    CopyKeyID,
     CopyUsername,
     CopyTOTP,
     HasTOTP,
@@ -16,6 +17,7 @@
     CreatePassword,
     UpdatePassword,
     RemovePassword,
+    RevealPath,
     PickPrivateKey,
     PickStoreDir,
     ImportPGPKeyFile,
@@ -60,16 +62,38 @@
     canceled: boolean
   }
 
+  // One row of the lock screen's location list.
+  //
+  // Each row is either a directory, which the user can open, or a key, which the
+  // user can copy by identifier -- never a key file, which is a thing they have
+  // no reason to point at. So the two row kinds share one shape and one action
+  // slot rather than each carrying a column of its own: label, value, one button.
+  interface Location {
+    key: string
+    label: string
+    what: string
+    // The value as rendered. A path is middle-elided, a key ID is shown whole.
+    text: string
+    // The full value, for the hover. Equal to text when nothing was elided.
+    title: string
+    // The untruncated path, sent to RevealPath. Empty on a key row.
+    path: string
+    // The kind of key, sent to CopyKeyID. Empty on a directory row.
+    kind: string
+  }
+
   interface ClonePrep {
     host: string
     fingerprint: string
     known: boolean
   }
 
+  // The lock screen's environment block. Written only by refreshInfo, so a
+  // value never means one thing on the lock screen and another in Settings.
   let info: Record<string, string> = {dataDir: '', storePath: '', pgpKey: '', sshKey: '', autoLock: ''}
-let pgpPass: string = ''
-let sshPass: string = ''
-let lockPass: string = ''
+  let pgpPass: string = ''
+  let sshPass: string = ''
+  let lockPass: string = ''
   let error: string = ''
   let busy: boolean = false
   let unlocked: boolean = false
@@ -96,6 +120,12 @@ let lockPass: string = ''
   let copiedName: string | null = null
   let copiedRemaining: number = 0
   let copyTimer: ReturnType<typeof setInterval> | null = null
+
+  // Which row last had its key identifier copied, and the timer that takes the
+  // tick off it. A fingerprint is not cleared, so this is the only thing that
+  // says the copy landed.
+  let copiedLoc: string = ''
+  let copyLocTimer: ReturnType<typeof setTimeout> | null = null
 
   // Windows snapshots the clipboard into Clipboard History and the cloud
   // clipboard as an item is set, so the countdown below cannot reach what it
@@ -278,17 +308,25 @@ let lockPass: string = ''
     rows = buildRows(tree, expanded)
   }
 
+  // The lock screen's environment block comes from exactly one call. Settings
+  // used to write three of these fields back with values of a different shape
+  // (a store path with no "(none)" in it, a key fingerprint where a presence
+  // note belonged), which is how the rows stopped meaning what their labels say.
+  async function refreshInfo(): Promise<void> {
+    try {
+      info = await AppInfo()
+    } catch (_) {
+      // keep defaults
+    }
+  }
+
   async function load(): Promise<void> {
     try {
       unlocked = await IsUnlocked()
     } catch (_) {
       unlocked = false
     }
-    try {
-      info = await AppInfo()
-    } catch (_) {
-      // keep defaults
-    }
+    await refreshInfo()
     try {
       clearSeconds = await ClipboardClearSeconds()
     } catch (_) {
@@ -570,9 +608,7 @@ let lockPass: string = ''
   async function loadSettings(): Promise<void> {
     try {
       sw = await CurrentSettings()
-      info.storePath = sw.storePath
-      info.pgpKey = sw.hasPgp ? sw.pgpKeyFingerprint : ''
-      info.sshKey = sw.hasSsh ? sw.sshKeyId : ''
+      await refreshInfo()
     } catch (e) {
       setupErr = String(e)
       flash(setupErr, true)
@@ -597,6 +633,110 @@ let lockPass: string = ''
 
   function storeBase(p: string): string {
     return p.split(/[\\/]+/).filter(Boolean).pop() ?? p
+  }
+
+  // The lock screen used to be a two-column table whose cells ended in a CSS
+  // ellipsis, which cut the tail of every path — the one part of a Windows path
+  // that says what it is (PassOne, stores\work) — and had no tooltip at all, so
+  // the head was lost too. A path is now middle-elided, which keeps the drive
+  // the reader can guess and the tail they cannot, and carries the whole path as
+  // its title so a hover reads out what the row had to drop.
+  //
+  // PATH_BUDGET is a character count rather than a pixel measurement because
+  // style-src 'self' means no inline style, and because the value is rendered in
+  // a monospace face where a character is a fixed fraction of the font size. It
+  // is deliberately under the width the column can actually reach — 32rem of
+  // block, less the label and the button and the gaps — so the CSS ellipsis
+  // stays a safety net for a path longer than expected rather than the thing
+  // that decides what a path looks like.
+  const PATH_BUDGET = 44
+
+  function elidePath(p: string): string {
+    if (p.length <= PATH_BUDGET) {
+      return p
+    }
+    // Cut the middle, not the end.
+    const tail = Math.ceil((PATH_BUDGET - 1) / 2)
+    const head = PATH_BUDGET - 1 - tail
+    return p.slice(0, head) + '…' + p.slice(p.length - tail)
+  }
+
+  function dirLocation(key: string, label: string, what: string, path: string): Location {
+    return {
+      key,
+      label,
+      what,
+      text: path ? elidePath(path) : '(none)',
+      title: path,
+      path,
+      kind: '',
+    }
+  }
+
+  function keyLocation(key: string, label: string, kind: string, id: string): Location {
+    return {
+      key,
+      label,
+      what: kind === 'pgp' ? 'OpenPGP key' : 'SSH key',
+      // A fingerprint is 40 hex characters and an SSH id is shorter, so both
+      // fit the value column whole and are never elided: an identifier that is
+      // cut is useless, and the point of this row is to be read.
+      text: id || 'not imported',
+      title: id,
+      path: '',
+      kind,
+    }
+  }
+
+  function buildLocations(i: Record<string, string>): Location[] {
+    const store = i.storePath === '(none)' ? '' : i.storePath
+    return [
+      dirLocation('dataDir', 'Data dir', 'data directory', i.dataDir),
+      dirLocation('store', 'Store', 'store', store),
+      keyLocation('pgpKey', 'PGP key', 'pgp', i.pgpKey),
+      keyLocation('sshKey', 'SSH key', 'ssh', i.sshKey),
+    ]
+  }
+
+  // info is passed in rather than closed over: a reactive statement whose body
+  // is a bare call has no visible dependency, so the compiler would never re-run
+  // it and the rows would keep rendering the values AppInfo was first asked for.
+  $: locations = buildLocations(info)
+
+  function stopLocationCopy(): void {
+    if (copyLocTimer) {
+      clearTimeout(copyLocTimer)
+      copyLocTimer = null
+    }
+    copiedLoc = ''
+  }
+
+  async function copyKeyLoc(loc: Location): Promise<void> {
+    // The same test the button's disabled attribute uses. Guarding in the
+    // handler too means the row does nothing without an identifier, rather than
+    // relying on a disabled button to be unclickable.
+    if (!loc.title) {
+      return
+    }
+    try {
+      await CopyKeyID(loc.kind)
+      stopLocationCopy()
+      copiedLoc = loc.key
+      copyLocTimer = setTimeout(stopLocationCopy, 1600)
+    } catch (e) {
+      flash(String(e), true)
+    }
+  }
+
+  async function openDirLoc(loc: Location): Promise<void> {
+    if (!loc.path) {
+      return
+    }
+    try {
+      await RevealPath(loc.path)
+    } catch (e) {
+      flash(String(e), true)
+    }
   }
 
   function openSettings(): void {
@@ -826,11 +966,6 @@ let lockPass: string = ''
       await SetUsernameSource(sw.usernameSource)
       flash('Settings saved')
       await loadSettings()
-      try {
-        info = await AppInfo()
-      } catch (_) {
-        // keep defaults
-      }
     } catch (e) {
       setupErr = String(e)
       flash(setupErr, true)
@@ -1041,6 +1176,7 @@ let lockPass: string = ''
       offWarning()
       stopCountdown()
       stopTOTPCountdown()
+      stopLocationCopy()
       if (statusTimer) {
         clearTimeout(statusTimer)
       }
@@ -1062,13 +1198,54 @@ let lockPass: string = ''
       </div>
     </div>
 
-    <dl class="panel ring-panel grid w-full max-w-sm grid-cols-2 gap-x-6 gap-y-1 rounded-xl p-4 text-xs text-faint">
-      <dt class="text-mute">Data dir</dt><dd class="truncate text-right">{info.dataDir}</dd>
-      <dt class="text-mute">Store</dt><dd class="truncate text-right">{info.storePath}</dd>
-      <dt class="text-mute">PGP key</dt><dd class="truncate text-right" title={info.pgpKey}>{info.pgpKey}</dd>
-      <dt class="text-mute">SSH key</dt><dd class="truncate text-right" title={info.sshKey}>{info.sshKey}</dd>
-      <dt class="text-mute">Auto-lock</dt><dd class="text-right">{info.autoLock}</dd>
-    </dl>
+    <!--
+      One shared grid, and every row contributes all three of its cells -- the
+      auto-lock row included, with an empty action slot. That is what keeps the
+      rows in alignment: the columns are defined once by the container, and no
+      row can shift or re-size them by having a different number of cells.
+      Every cell is h-6, the same height as the button, so the rows are also
+      evenly spaced instead of stepping by whatever each row happens to hold.
+    -->
+    <div class="grid w-full max-w-lg grid-cols-[4.5rem_minmax(0,1fr)_1.5rem] items-center gap-x-2 gap-y-0.5">
+      {#each locations as loc (loc.key)}
+        <div class="text-faint h-6 truncate text-xs leading-6">{loc.label}</div>
+        <span class="text-sub h-6 min-w-0 truncate font-mono text-xs leading-6" title={loc.title}>{loc.text}</span>
+        <div class="flex h-6 items-center justify-end">
+          {#if loc.kind}
+            <button
+              on:click={() => copyKeyLoc(loc)}
+              title={'Copy the ' + loc.what + ' ID'}
+              disabled={!loc.title}
+              class="btn-ghost flex h-6 w-6 items-center justify-center rounded disabled:opacity-40"
+            >
+              {#if copiedLoc === loc.key}
+                <svg xmlns="http://www.w3.org/2000/svg" class="text-success h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+              {:else}
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon-dim h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m0 0h3a1 1 0 011 1v3"/>
+                </svg>
+              {/if}
+            </button>
+          {:else}
+            <button
+              on:click={() => openDirLoc(loc)}
+              title={'Open the ' + loc.what + ' in File Explorer'}
+              disabled={!loc.path}
+              class="btn-ghost flex h-6 w-6 items-center justify-center rounded disabled:opacity-40"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" class="icon-dim h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
+              </svg>
+            </button>
+          {/if}
+        </div>
+      {/each}
+      <div class="text-faint h-6 truncate text-xs leading-6">Auto-lock</div>
+      <span class="text-sub h-6 min-w-0 truncate text-xs leading-6">{info.autoLock}</span>
+      <div class="h-6"></div>
+    </div>
 
     <form class="flex w-full max-w-sm flex-col gap-3" on:submit|preventDefault={submit}>
       <label class="text-faint flex flex-col gap-1 text-xs">

@@ -22,6 +22,10 @@ export function CloneStore(arg1, arg2) {
   return window['go']['main']['App']['CloneStore'](arg1, arg2);
 }
 
+export function CopyKeyID(arg1) {
+  return window['go']['main']['App']['CopyKeyID'](arg1);
+}
+
 export function CopyPassword(arg1) {
   return window['go']['main']['App']['CopyPassword'](arg1);
 }
@@ -96,6 +100,10 @@ export function PrepareClone(arg1) {
 
 export function RemovePassword(arg1) {
   return window['go']['main']['App']['RemovePassword'](arg1);
+}
+
+export function RevealPath(arg1) {
+  return window['go']['main']['App']['RevealPath'](arg1);
 }
 
 export function SetAutoLock(arg1) {

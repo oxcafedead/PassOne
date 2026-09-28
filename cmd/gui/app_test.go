@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/oxcafedead/passone/internal/ui"
@@ -25,11 +26,66 @@ func TestAppInfoAndPresence(t *testing.T) {
 	if info["storePath"] != "(none)" {
 		t.Fatalf("storePath = %q", info["storePath"])
 	}
-	if info["pgpKey"] != "not imported" {
-		t.Fatalf("pgpKey = %q", info["pgpKey"])
+	// A key is named by the identifier the user confirms, and by nothing else.
+	// With no key imported there is no identifier, and the row reads "not
+	// imported" from the empty value rather than from a second field.
+	if info["pgpKey"] != "" {
+		t.Fatalf("pgpKey = %q, want empty before a key is imported", info["pgpKey"])
+	}
+	if info["sshKey"] != "" {
+		t.Fatalf("sshKey = %q, want empty before a key is imported", info["sshKey"])
+	}
+	// The files the keys are sealed in are deliberately absent: the lock screen
+	// shows a key, not a path into the data directory.
+	for _, gone := range []string{"pgpKeyFile", "sshKeyFile"} {
+		if _, ok := info[gone]; ok {
+			t.Errorf("AppInfo still reports %q", gone)
+		}
 	}
 	if info["autoLock"] != "5 min" {
 		t.Fatalf("autoLock = %q", info["autoLock"])
+	}
+}
+
+func TestAppRevealPathRefusesOutsideTheAppDirectories(t *testing.T) {
+	a := newTestAppGUI(t)
+	dataDir := a.AppInfo()["dataDir"]
+
+	// No store is configured, so the data dir is the only directory the app
+	// would hand to Explorer, and a path is only ever revealed if it is inside
+	// one of them. Nothing here reaches the shell, which is why the refusals are
+	// asserted here and the argv is asserted in internal/ui, where the launcher
+	// is injected.
+	for _, path := range []string{
+		"",
+		"   ",
+		"C:\\Windows",
+		filepath.Join(dataDir, "..", "..", "..", "Windows"),
+		// A sibling that only shares a prefix with the data dir.
+		dataDir + "-other",
+	} {
+		if err := a.RevealPath(path); err == nil {
+			t.Errorf("RevealPath(%q) = nil, want a refusal", path)
+		}
+	}
+}
+
+func TestAppCopyKeyIDOnlyTakesAKeyTheAppStores(t *testing.T) {
+	a := newTestAppGUI(t)
+
+	// The text comes from the app's own config, so the only thing the renderer
+	// gets to choose is which of the two keys it wants. An unknown name, and a
+	// key that has not been imported, both have to be refused here rather than
+	// putting something unexpected on the clipboard.
+	for _, kind := range []string{"", "gpg", "PGP", "../../etc/passwd", "pgp ", "ssh; rm"} {
+		if err := a.CopyKeyID(kind); err == nil {
+			t.Errorf("CopyKeyID(%q) = nil, want a refusal", kind)
+		}
+	}
+	for _, kind := range []string{"pgp", "ssh"} {
+		if err := a.CopyKeyID(kind); err == nil {
+			t.Errorf("CopyKeyID(%q) = nil, want a refusal before a key is imported", kind)
+		}
 	}
 }
 
@@ -39,12 +95,6 @@ func TestPresenceHelpers(t *testing.T) {
 	}
 	if got := presence("x"); got != "x" {
 		t.Fatalf("presence(\"x\") = %q", got)
-	}
-	if got := presenceBool(true); got != "imported" {
-		t.Fatalf("presenceBool(true) = %q", got)
-	}
-	if got := presenceBool(false); got != "not imported" {
-		t.Fatalf("presenceBool(false) = %q", got)
 	}
 }
 

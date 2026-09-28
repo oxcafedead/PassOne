@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -100,11 +102,145 @@ func (g *GUI) HasStoredPGPKey() bool { return g.core.HasStoredPGPKey() }
 // HasStoredSSHKey reports whether an SSH private key was imported.
 func (g *GUI) HasStoredSSHKey() bool { return g.core.HasStoredSSHKey() }
 
+// PGPKeyFingerprint returns the configured primary fingerprint, or "" when no
+// OpenPGP key has been imported. The lock screen shows the identifier rather
+// than the file the key is sealed in: the identity is what a user is asked to
+// confirm, and the path of a sealed key is not a thing they need to point at.
+func (g *GUI) PGPKeyFingerprint() string { return g.core.PGPKeyFingerprint() }
+
+// SSHKeyID returns the configured SSH key identifier, or "" when no key has been
+// imported.
+func (g *GUI) SSHKeyID() string { return g.core.SSHKeyID() }
+
 // DataDir returns the application data directory.
 func (g *GUI) DataDir() string { return g.core.DataDir() }
 
 // StorePath returns the configured store path (may be empty).
 func (g *GUI) StorePath() string { return g.core.Config().StorePath }
+
+// CopyKeyID puts one of the app's own key identifiers on the clipboard, so a
+// user can paste it into ssh-keygen, a gpg command or a support ticket.
+//
+// The text is the app's, never the caller's: the renderer names a key and gets
+// that key's identifier back, so this cannot be used as a general "write
+// anything to the clipboard" call, and there is nothing here to allowlist. A
+// fingerprint is public, so like a copied path it is marked out of Clipboard
+// History and the cloud clipboard, and — unlike a secret — it is not cleared on
+// a timer: it has to survive being pasted, and it costs nothing to leak.
+func (g *GUI) CopyKeyID(kind string) error {
+	var id string
+	switch kind {
+	case "pgp":
+		id = g.core.PGPKeyFingerprint()
+	case "ssh":
+		id = g.core.SSHKeyID()
+	default:
+		return fmt.Errorf("%q is not a key this app stores", kind)
+	}
+	if id == "" {
+		return fmt.Errorf("no %s key has been imported yet", kind)
+	}
+	res, err := cliputil.Copied(id, 0)
+	if err != nil {
+		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)
+	}
+	if caveat := res.Caveat(); caveat != "" {
+		g.clipboardWarning(caveat)
+	}
+	return nil
+}
+
+// RevealPath opens one of the app's own directories in Windows Explorer.
+//
+// Both rows that call this hold directories, so the file cases are gone: there
+// is nothing to select and no parent to fall back on. A path that does not
+// exist is an error, because the data directory and the store are either there
+// or the user has not chosen a store yet — and the row's button is disabled in
+// the second case anyway.
+func (g *GUI) RevealPath(path string) error {
+	abs, err := g.ownPath(path)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("%s is not there: %w", abs, err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is a file, not a folder", abs)
+	}
+	return openExplorer(abs)
+}
+
+// openExplorer is indirected so a test can assert the exact argument without
+// launching Explorer on the machine running the tests.
+var openExplorer = func(arg string) error {
+	// explorer.exe takes its target as a bare argv element and never goes
+	// through a shell, so a path is a path and not a command.
+	//
+	// Do not set HideWindow here. explorer.exe is a client of the shell: it
+	// hands its command line to the running Explorer and exits, and it passes
+	// its own STARTUPINFO on, so SW_HIDE asks the shell for a hidden window and
+	// the folder opens nowhere. The usual reason to set HideWindow, a console
+	// flashing in a GUI app, cannot happen here anyway -- explorer.exe is a
+	// GUI-subsystem binary and never allocates a console.
+	cmd := exec.Command("explorer.exe", arg)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("could not open Windows Explorer: %w", err)
+	}
+	// explorer.exe is a client of the shell and normally returns at once, but
+	// it does not always: release the handle on a goroutine so a lingering
+	// one cannot hold this up.
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+// ownPath resolves path and reports it only when it lies inside the
+// application data directory or the configured store — the two places the
+// frontend is shown paths for.
+//
+// The renderer is the only caller, and it is a webview: whatever ends up bound
+// to this bridge can call it. Checking here is what makes CopyPath and
+// RevealPath "show me my own directories" rather than "put text on the
+// clipboard, or start a process in a folder of the caller's choosing". The
+// store is in the list because OpenLocalStore and CloneStore accept a directory
+// anywhere on any drive.
+func (g *GUI) ownPath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("there is no path to open")
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("%q is not a usable path: %w", trimmed, err)
+	}
+	roots := []string{g.core.DataDir()}
+	if store := g.core.Config().StorePath; store != "" {
+		roots = append(roots, store)
+	}
+	for _, root := range roots {
+		cleanRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		if containsPath(cleanRoot, abs) {
+			return abs, nil
+		}
+	}
+	return "", fmt.Errorf("%s is not inside the PassOne data directory or the configured store", abs)
+}
+
+// containsPath reports whether path is root itself or sits under it. The
+// separator is appended to root first, so C:\PassOne-2 does not pass as living
+// in C:\PassOne. The comparison folds case because Windows paths do not carry
+// one.
+func containsPath(root, path string) bool {
+	if strings.EqualFold(root, path) {
+		return true
+	}
+	prefix := root + string(filepath.Separator)
+	return len(path) > len(prefix) && strings.EqualFold(path[:len(prefix)], prefix)
+}
 
 // AutoLockMinutes returns the configured idle timeout in minutes.
 func (g *GUI) AutoLockMinutes() int { return g.core.Config().AutoLockMinutes }

@@ -101,6 +101,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The lock screen cut the paths it exists to show. The Data dir and the store
+  were `truncate`d in a narrow column with no `title` and no way to recover what
+  was lost. Each is now a row that elides the *middle* of a long path, never the
+  tail that identifies it, and carries the full path as its `title`, so a hover
+  reads the whole thing out. The keys went back to what they were — the
+  fingerprint and the SSH id, not the file they are sealed in: a user confirms
+  an identifier and has no reason to point at a sealed key. Directories open in
+  File Explorer and keys copy their identifier, one action per row, and `RevealPath`
+  only accepts a directory under the PassOne data directory or the configured
+  store (case-insensitively, after `filepath.Abs`) and runs `explorer.exe` with
+  a bare argv element and no shell. `CopyKeyID` takes the *name* of a key and
+  returns that key's own identifier, so the renderer can never use the clipboard
+  as a general write-anything channel. GH #36.
+- The Open button did nothing. `openExplorer` set `HideWindow`, and
+  `explorer.exe` is a client of the shell: it hands its command line to the
+  running Explorer and passes its own `STARTUPINFO` on, so `SW_HIDE` asks the
+  shell for a hidden window and the folder opens nowhere. The usual reason to
+  set `HideWindow` — a console flashing in a GUI app — cannot apply, because
+  `explorer.exe` is a GUI-subsystem binary and never allocates one.
+- The lock screen's key rows could read "no key" while one was imported.
+  `loadSettings` wrote the key *fingerprint* over the value the row shows, which
+  is a presence note, so the two meant different things in the same field and the
+  row only told the truth after a restart. `AppInfo` now reports the identifier
+  itself, and `loadSettings` no longer writes over the lock screen at all.
 - Refreshing the entry list reset the sidebar to the top. `refresh()` held
   `listing` for the whole of the `ListPasswords()` call and the template rendered
   that state *instead of* the list, so the `<nav>` scroll container was emptied,

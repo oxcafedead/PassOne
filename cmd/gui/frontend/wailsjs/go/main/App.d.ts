@@ -12,6 +12,8 @@ export function ChangeLockPassword(arg1:string,arg2:string):Promise<void>;
 
 export function CloneStore(arg1:string,arg2:string):Promise<void>;
 
+export function CopyKeyID(arg1:string):Promise<void>;
+
 export function CopyPassword(arg1:string):Promise<void>;
 
 export function CopyTOTP(arg1:string):Promise<string>;
@@ -49,6 +51,8 @@ export function PickStoreDir():Promise<ui.Picked>;
 export function PrepareClone(arg1:string):Promise<ui.ClonePrep>;
 
 export function RemovePassword(arg1:string):Promise<void>;
+
+export function RevealPath(arg1:string):Promise<void>;
 
 export function SetAutoLock(arg1:number):Promise<void>;
 

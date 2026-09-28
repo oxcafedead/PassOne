@@ -476,6 +476,141 @@ func TestDialogNilContext(t *testing.T) {
 	}
 }
 
+// recordExplorer swaps the Explorer launcher for a recorder, so a test can pin
+// the exact argument without a window appearing on the machine running it.
+func recordExplorer(t *testing.T) *[]string {
+	t.Helper()
+	var got []string
+	prev := openExplorer
+	openExplorer = func(arg string) error {
+		got = append(got, arg)
+		return nil
+	}
+	t.Cleanup(func() { openExplorer = prev })
+	return &got
+}
+
+func TestRevealPathOpensADirectory(t *testing.T) {
+	g := newTestGUI(t)
+	calls := recordExplorer(t)
+
+	// A directory is opened in place, with no /select and no quoting: the
+	// argument is a bare path, because explorer.exe is not run through a shell.
+	if err := g.RevealPath(g.DataDir()); err != nil {
+		t.Fatalf("RevealPath(data dir): %v", err)
+	}
+	if len(*calls) != 1 || (*calls)[0] != g.DataDir() {
+		t.Fatalf("explorer args = %v, want [%s]", *calls, g.DataDir())
+	}
+}
+
+func TestRevealPathRefusesAFileOrSomethingMissing(t *testing.T) {
+	g := newTestGUI(t)
+	calls := recordExplorer(t)
+
+	// Both rows that call RevealPath hold directories, so a file is a mistake and
+	// a path that is not there is nothing to open. Neither may reach Explorer --
+	// the /select, and the "open the folder a missing key would be created in",
+	// cases went away with the key-file rows.
+	if err := os.WriteFile(filepath.Join(g.DataDir(), "notadir"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(g.DataDir(), "notadir"),
+		filepath.Join(g.DataDir(), "keys", "pgp.dat"),
+		filepath.Join(g.DataDir(), "no-such-folder"),
+	} {
+		if err := g.RevealPath(path); err == nil {
+			t.Errorf("RevealPath(%q) = nil, want a refusal", path)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("a refused path reached Explorer: %v", *calls)
+	}
+}
+
+func TestRevealPathRefusesPathsOutsideTheApp(t *testing.T) {
+	g := newTestGUI(t)
+	calls := recordExplorer(t)
+	dir := g.DataDir()
+
+	// The store is in the allowlist too: OpenLocalStore and CloneStore accept
+	// a directory anywhere, so a vault that is not under the data dir is still
+	// a path the user is shown.
+	elsewhere := filepath.Join(t.TempDir(), "store")
+	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(elsewhere, ".gpg-id"), []byte("AABB"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.OpenLocalStore(elsewhere); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if err := g.RevealPath(g.StorePath()); err != nil {
+		t.Errorf("RevealPath(configured store): %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("explorer args = %v, want the store to be revealed", *calls)
+	}
+
+	// A sibling directory that merely shares a prefix is not inside: appending
+	// the separator is what stops C:\PassOne-2 passing as C:\PassOne.
+	for _, path := range []string{
+		"",
+		"\t ",
+		dir + "-other",
+		filepath.Join(dir, "..", ".."),
+		filepath.Join(elsewhere, "..", "elsewhere2"),
+	} {
+		if err := g.RevealPath(path); err == nil {
+			t.Errorf("RevealPath(%q) = nil, want a refusal", path)
+		}
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("a refused path reached Explorer: %v", *calls)
+	}
+}
+
+func TestCopyKeyIDTakesTheAppsOwnIdentifier(t *testing.T) {
+	g := newTestGUI(t)
+
+	// The renderer picks which key to copy, never what to copy: the text comes
+	// out of the app's own config or not at all. Every unknown name is refused.
+	for _, kind := range []string{"", "gpg", "PGP", "id", "pgp; echo", "..", "ssh "} {
+		if err := g.CopyKeyID(kind); err == nil {
+			t.Errorf("CopyKeyID(%q) = nil, want a refusal", kind)
+		}
+	}
+	// Nothing is imported in this environment, so both keys are empty and there
+	// is nothing to put on the clipboard.
+	for _, kind := range []string{"pgp", "ssh"} {
+		if err := g.CopyKeyID(kind); err == nil {
+			t.Errorf("CopyKeyID(%q) = nil, want a refusal with no key imported", kind)
+		}
+	}
+}
+
+func TestContainsPath(t *testing.T) {
+	cases := []struct {
+		root, path string
+		want       bool
+	}{
+		{`C:\PassOne`, `C:\PassOne`, true},
+		{`C:\PassOne`, `c:\passone`, true},
+		{`C:\PassOne`, `C:\PassOne\keys\pgp.dat`, true},
+		{`C:\PassOne`, `C:\PassOne-2`, false},
+		{`C:\PassOne`, `C:\PassOne2\keys`, false},
+		{`C:\PassOne`, `C:\`, false},
+		{`C:\PassOne`, `C:\Other`, false},
+	}
+	for _, tc := range cases {
+		if got := containsPath(tc.root, tc.path); got != tc.want {
+			t.Errorf("containsPath(%q, %q) = %v, want %v", tc.root, tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestCloneHelpers(t *testing.T) {
 	g := newTestGUI(t)
 

@@ -7,7 +7,7 @@
 // here rather than passing against a stand-in.
 import {vi, type Mock} from 'vitest'
 
-// Default behaviour, so the component renders without configuring all 36
+// Default behaviour, so the component renders without configuring all 38
 // bindings per test. CurrentSettings describes a fully configured store, which
 // stops openSettingsIfFirstRun from opening the onboarding wizard over the top
 // of every test.
@@ -17,13 +17,14 @@ const defaults = {
   AppInfo: async () => ({
     dataDir: 'C:\\Users\\tester\\AppData\\Local\\PassOne',
     storePath: 'C:\\Users\\tester\\AppData\\Local\\PassOne\\store',
-    pgpKey: '0xDEADBEEF',
+    pgpKey: '0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
     sshKey: '',
     autoLock: '10 min',
   }),
   ListPasswords: async () => [] as string[],
   ShowPassword: async () => 'hunter2\nrecovery codes',
   CopyPassword: async () => undefined,
+  CopyKeyID: async () => undefined,
   CopyUsername: async () => undefined,
   CopyTOTP: async () => undefined,
   HasTOTP: async () => false,
@@ -33,6 +34,7 @@ const defaults = {
   CreatePassword: async () => 'Created',
   UpdatePassword: async () => 'Updated',
   RemovePassword: async () => 'Removed',
+  RevealPath: async () => undefined,
   PickPrivateKey: async () => ({path: '', canceled: true, password: ''}),
   PickStoreDir: async () => ({path: '', canceled: true}),
   ImportPGPKeyFile: async () => 'ok',

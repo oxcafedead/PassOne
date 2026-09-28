@@ -5,12 +5,15 @@ import {bridge} from './bridge'
 import {emit} from './runtime'
 
 const {
+  AppInfo,
   ClipboardHistoryEnabled,
   CopyPassword,
+  CopyKeyID,
   CreatePassword,
   IsUnlocked,
   ListPasswords,
   RemovePassword,
+  RevealPath,
   ShowPassword,
   Unlock,
   UpdatePassword,
@@ -34,15 +37,29 @@ async function selectEntry(entry = 'github/personal'): Promise<void> {
   await screen.findByRole('heading', {level: 2, name: entry})
 }
 
-// The data directory shown on the lock screen, read through its <dt> so the
-// assertion does not depend on the settings wizard having refreshed storePath.
-function storeDir(): HTMLElement {
-  const dt = screen.getByText('Data dir')
-  const dd = dt.nextElementSibling
-  if (!dd) {
-    throw new Error('the lock screen has no Data dir value')
+// The lock screen's location list is one shared grid: every row contributes
+// exactly three cells, in the order label, value, action. Anchoring on the label
+// cell and walking forward keeps an assertion about one row from silently
+// reading another, and the fact that the count is always three is the same
+// property that keeps the real rows aligned.
+type Cell = 'value' | 'action'
+
+function locationCell(label: string, cell: Cell): HTMLElement {
+  const at = cell === 'value' ? 1 : 2
+  let node: Element | null = screen.getByText(label)
+  for (let i = 0; i < at && node; i++) {
+    node = node.nextElementSibling
   }
-  return dd as HTMLElement
+  if (!node) {
+    throw new Error(`the ${label} row has no ${cell} cell`)
+  }
+  return node as HTMLElement
+}
+
+// The value cell carries the full value as its title, which is what a hover
+// reads out and what makes a path cut on screen recoverable.
+function locationValue(label: string): HTMLElement {
+  return locationCell(label, 'value')
 }
 
 // A vault big enough that the sidebar list overflows and can actually be
@@ -79,7 +96,9 @@ describe('lock screen', () => {
     expect(screen.getByRole('heading', {name: 'PassOne'})).toBeInTheDocument()
     // The lock screen renders before AppInfo has answered, so wait for it.
     await waitFor(() =>
-      expect(storeDir()).toHaveTextContent('C:\\Users\\tester\\AppData\\Local\\PassOne'),
+      expect(locationValue('Data dir')).toHaveTextContent(
+        'C:\\Users\\tester\\AppData\\Local\\PassOne',
+      ),
     )
 
     // Nothing from the vault is reachable before the lock is open.
@@ -91,6 +110,174 @@ describe('lock screen', () => {
     await fireEvent.click(screen.getByRole('button', {name: 'Unlock'}))
 
     await waitFor(() => expect(Unlock).toHaveBeenCalledWith('correct horse'))
+  })
+
+  it('keeps every path whole: the full value is on the row and in its title', async () => {
+    locked()
+    render(App)
+
+    // Issue #36: the lock screen cut the data dir and store paths with a CSS
+    // ellipsis and gave those two rows no title at all, so the identifying tail
+    // was on screen and the rest was nowhere. Every row now carries the whole
+    // path in the title, which is what a hover reads out.
+    const dirs = [
+      ['Data dir', 'C:\\Users\\tester\\AppData\\Local\\PassOne'],
+      ['Store', 'C:\\Users\\tester\\AppData\\Local\\PassOne\\store'],
+    ] as const
+    for (const [label, full] of dirs) {
+      await waitFor(() => expect(locationValue(label)).toHaveAttribute('title', full))
+    }
+
+    // The key rows name the key, not the file it is sealed in: a user confirms a
+    // fingerprint and never needs the path of a sealed key.
+    expect(locationValue('PGP key')).toHaveTextContent(
+      '0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+    )
+    expect(locationValue('SSH key')).toHaveTextContent('not imported')
+    for (const label of ['PGP key', 'SSH key']) {
+      expect(screen.queryByTitle(`Open the ${label} in File Explorer`)).not.toBeInTheDocument()
+    }
+  })
+
+  it('gives a directory an open action and a key a copy action, never both', async () => {
+    locked()
+    render(App)
+
+    // A directory is somewhere to go, and the user is expected to recognise it
+    // from a path -- so it opens. A key is an identifier, and the thing to do
+    // with an identifier is paste it somewhere.
+    expect(screen.getByTitle('Open the data directory in File Explorer')).toBeInTheDocument()
+    expect(screen.getByTitle('Open the store in File Explorer')).toBeInTheDocument()
+    expect(screen.queryByTitle('Copy the data directory path')).not.toBeInTheDocument()
+    expect(screen.getByTitle('Copy the OpenPGP key ID')).toBeInTheDocument()
+    expect(screen.getByTitle('Copy the SSH key ID')).toBeInTheDocument()
+    expect(screen.queryByTitle('Open the OpenPGP key in File Explorer')).not.toBeInTheDocument()
+  })
+
+  it('lines every row up in the same three columns', async () => {
+    locked()
+    render(App)
+    await waitFor(() =>
+      expect(locationValue('Data dir')).toHaveAttribute(
+        'title',
+        'C:\\Users\\tester\\AppData\\Local\\PassOne',
+      ),
+    )
+
+    // The auto-lock row is not part of the each block, so it is the one row that
+    // could drift out of alignment: it has to contribute all three cells like
+    // every other, and every cell has to be the same height as the button in it.
+    const labels = ['Data dir', 'Store', 'PGP key', 'SSH key', 'Auto-lock']
+    const rows = labels.map((label) => {
+      const labelCell = screen.getByText(label)
+      const value = labelCell.nextElementSibling as HTMLElement
+      const action = value?.nextElementSibling as HTMLElement
+      expect(action, `the ${label} row has no action cell`).not.toBeNull()
+      return [labelCell, value, action] as const
+    })
+    // Every row is the same shape, and every cell is the same height, so nothing
+    // can sit lower than its neighbours.
+    for (const [labelCell, value, action] of rows) {
+      for (const cell of [labelCell, value, action]) {
+        expect(cell.className).toContain('h-6')
+      }
+    }
+  })
+
+  it('elides the middle of a path that will not fit, never the tail', async () => {
+    locked()
+    AppInfo.mockResolvedValue({
+      dataDir:
+        'C:\\Users\\a-very-long-account-name\\OneDrive\\Documents\\AppData\\Local\\PassOne',
+      storePath:
+        'C:\\Users\\a-very-long-account-name\\OneDrive\\Documents\\AppData\\Local\\PassOne\\store',
+      pgpKey: '0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+      sshKey: '',
+      autoLock: '10 min',
+    })
+    render(App)
+
+    const cell = await waitFor(() => {
+      const found = locationValue('Data dir')
+      expect(found).toHaveTextContent('…')
+      return found
+    })
+    // CSS would cut this at the end and take the directory name with it.
+    expect(cell).toHaveTextContent('PassOne')
+    expect(cell.textContent?.endsWith('PassOne')).toBe(true)
+    // What is on screen is shortened; what the title holds is not.
+    expect(cell.textContent?.length).toBeLessThan(
+      'C:\\Users\\a-very-long-account-name\\OneDrive\\Documents\\AppData\\Local\\PassOne'.length,
+    )
+    expect(cell).toHaveAttribute(
+      'title',
+      'C:\\Users\\a-very-long-account-name\\OneDrive\\Documents\\AppData\\Local\\PassOne',
+    )
+
+    // A key identifier is never shortened: a cut fingerprint is useless.
+    expect(locationValue('PGP key').textContent).toHaveLength(42)
+  })
+
+  it('opens a directory in Explorer and copies a key ID, confirming the copy', async () => {
+    locked()
+    render(App)
+
+    const dataDir = 'C:\\Users\\tester\\AppData\\Local\\PassOne'
+    await waitFor(() => expect(locationValue('Data dir')).toHaveAttribute('title', dataDir))
+
+    await fireEvent.click(screen.getByTitle('Open the store in File Explorer'))
+    // The whole path goes over, not the elided text that is on screen.
+    await waitFor(() => expect(RevealPath).toHaveBeenCalledWith(dataDir + '\\store'))
+
+    await fireEvent.click(screen.getByTitle('Copy the OpenPGP key ID'))
+    await waitFor(() => expect(CopyKeyID).toHaveBeenCalledWith('pgp'))
+    // A fingerprint is not cleared on a timer, so the tick is the only feedback.
+    await waitFor(() =>
+      expect(locationCell('PGP key', 'action').querySelector('.text-success')).not.toBeNull(),
+    )
+  })
+
+  it('disables the action for a location that is not there yet', async () => {
+    locked()
+    AppInfo.mockResolvedValue({
+      dataDir: 'C:\\Users\\tester\\AppData\\Local\\PassOne',
+      storePath: '(none)',
+      pgpKey: '',
+      sshKey: '',
+      autoLock: '10 min',
+    })
+    render(App)
+
+    await waitFor(() => expect(locationValue('Store')).toHaveTextContent('(none)'))
+    expect(screen.getByTitle('Open the store in File Explorer')).toBeDisabled()
+    expect(screen.getByTitle('Copy the OpenPGP key ID')).toBeDisabled()
+    expect(screen.getByTitle('Copy the SSH key ID')).toBeDisabled()
+
+    await fireEvent.click(screen.getByTitle('Open the store in File Explorer'))
+    await fireEvent.click(screen.getByTitle('Copy the OpenPGP key ID'))
+    expect(RevealPath).not.toHaveBeenCalled()
+    expect(CopyKeyID).not.toHaveBeenCalled()
+  })
+
+  it('says why a path could not be opened instead of failing silently', async () => {
+    locked()
+    RevealPath.mockRejectedValue('C:\\Windows is not inside the PassOne data directory')
+    render(App)
+
+    // The row is only actionable once AppInfo has answered. Waiting on the real
+    // path matters: the title attribute exists while the path is still empty,
+    // and an empty one leaves the button disabled with nothing to wait on.
+    await waitFor(() =>
+      expect(locationValue('Data dir')).toHaveAttribute(
+        'title',
+        'C:\\Users\\tester\\AppData\\Local\\PassOne',
+      ),
+    )
+    await fireEvent.click(screen.getByTitle('Open the data directory in File Explorer'))
+    expect(RevealPath).toHaveBeenCalledWith('C:\\Users\\tester\\AppData\\Local\\PassOne')
+    expect(
+      await screen.findByText(/is not inside the PassOne data directory/),
+    ).toBeInTheDocument()
   })
 
   it('reports a bad password and stays locked', async () => {
@@ -345,6 +532,6 @@ describe('auto-lock', () => {
 
     await waitFor(() => expect(screen.queryByTestId('detail')).not.toBeInTheDocument())
     expect(screen.getByLabelText('Lock password')).toBeInTheDocument()
-    expect(storeDir()).toBeInTheDocument()
+    expect(locationValue('Data dir')).toBeInTheDocument()
   })
 })

@@ -30,16 +30,28 @@ func (a *App) ChangeLockPassword(oldPassword, newPassword string) error {
 // Lock drops all decrypted keys from memory.
 func (a *App) Lock() { a.gui.Lock() }
 
-// AppInfo describes the current environment for the unlock screen.
+// AppInfo describes the current environment for the unlock screen. Every value
+// is a location, a key identifier or a setting the user can act on, never
+// secret material: the keys are identified by the fingerprint a user is asked
+// to confirm, not by the file they are sealed in, which the app has no reason
+// to put on screen.
 func (a *App) AppInfo() map[string]string {
 	return map[string]string{
 		"dataDir":   a.gui.DataDir(),
 		"storePath": presence(a.gui.StorePath()),
-		"pgpKey":    presenceBool(a.gui.HasStoredPGPKey()),
-		"sshKey":    presenceBool(a.gui.HasStoredSSHKey()),
+		"pgpKey":    a.gui.PGPKeyFingerprint(),
+		"sshKey":    a.gui.SSHKeyID(),
 		"autoLock":  autoLockText(a.gui.AutoLockMinutes()),
 	}
 }
+
+// CopyKeyID puts the app's own OpenPGP fingerprint or SSH key identifier on the
+// clipboard. It is not cleared on a timer; a fingerprint is public and has to
+// survive being pasted.
+func (a *App) CopyKeyID(kind string) error { return a.gui.CopyKeyID(kind) }
+
+// RevealPath opens one of the app's own directories in Windows Explorer.
+func (a *App) RevealPath(path string) error { return a.gui.RevealPath(path) }
 
 // ListPasswords returns all password paths in the store.
 func (a *App) ListPasswords() ([]string, error) { return a.gui.ListPasswords() }
@@ -158,13 +170,6 @@ func presence(s string) string {
 		return "(none)"
 	}
 	return s
-}
-
-func presenceBool(ok bool) string {
-	if ok {
-		return "imported"
-	}
-	return "not imported"
 }
 
 func autoLockText(m int) string {

@@ -219,11 +219,17 @@ func TestReleaseSmokeFreshInstall(t *testing.T) {
 	if info["storePath"] != "(none)" {
 		t.Errorf("storePath = %q, want (none)", info["storePath"])
 	}
-	if info["pgpKey"] != "not imported" {
-		t.Errorf("pgpKey = %q, want not imported", info["pgpKey"])
+	// A key is named by its identifier, so a fresh install has none: the row
+	// reads "not imported" from the empty value. Nothing here is a path into the
+	// data directory, which is what the lock screen used to print instead.
+	if info["pgpKey"] != "" || info["sshKey"] != "" {
+		t.Errorf("pgpKey/sshKey = %q/%q, want both empty before an import",
+			info["pgpKey"], info["sshKey"])
 	}
-	if info["sshKey"] != "not imported" {
-		t.Errorf("sshKey = %q, want not imported", info["sshKey"])
+	for _, gone := range []string{"pgpKeyFile", "sshKeyFile"} {
+		if _, ok := info[gone]; ok {
+			t.Errorf("AppInfo still reports %q", gone)
+		}
 	}
 	if app.IsUnlocked() {
 		t.Error("a fresh install must start locked")
@@ -245,7 +251,9 @@ func TestReleaseSmokeFreshInstall(t *testing.T) {
 	}
 
 	info = app.AppInfo()
-	if info["pgpKey"] != "imported" || info["sshKey"] != "imported" {
+	// After an import the row shows the identifier itself, so the lock screen can
+	// be used to confirm which key is loaded.
+	if info["pgpKey"] == "" || info["sshKey"] == "" {
 		t.Errorf("AppInfo after import = %v", info)
 	}
 	if app.IsUnlocked() {
