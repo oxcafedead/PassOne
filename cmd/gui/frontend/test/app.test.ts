@@ -10,6 +10,10 @@ const {
   CopyPassword,
   CopyKeyID,
   CreatePassword,
+  CreateStore,
+  CurrentSettings,
+  DefaultStoreDir,
+  GeneratePGPKey,
   IsUnlocked,
   ListPasswords,
   RemovePassword,
@@ -29,6 +33,17 @@ function vault(entry = 'github/personal', plaintext = 'hunter2\nrecovery codes')
 
 function locked(): void {
   IsUnlocked.mockResolvedValue(false)
+}
+
+// A promise plus its resolver, so a test can hold a bridge call open and assert
+// what the UI shows while it is still in flight. Every mock resolves immediately,
+// which hides the window where `listing` is true.
+function deferred<T>(): {promise: Promise<T>; resolve: (v: T) => void} {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return {promise, resolve}
 }
 
 async function selectEntry(entry = 'github/personal'): Promise<void> {
@@ -533,5 +548,362 @@ describe('auto-lock', () => {
     await waitFor(() => expect(screen.queryByTestId('detail')).not.toBeInTheDocument())
     expect(screen.getByLabelText('Lock password')).toBeInTheDocument()
     expect(locationValue('Data dir')).toBeInTheDocument()
+  })
+})
+
+// A machine with nothing on it: no key, no store. CurrentSettings drives which
+// step the wizard opens at, so a first run and a key-but-no-store machine are
+// the same test with one field changed.
+function blank(): void {
+  locked()
+  CurrentSettings.mockResolvedValue({
+    ...settingsDefaults,
+    storePath: '',
+    pgpKeyFingerprint: '',
+    hasPgp: false,
+  })
+}
+
+const settingsDefaults = {
+  dataDir: 'C:\\data',
+  storePath: 'C:\\data\\store',
+  gitRemote: '',
+  pgpKeyFingerprint: '0xDEADBEEF',
+  sshKeyId: '',
+  autoLockMinutes: 10,
+  clipboardClearSeconds: 0,
+  gitAuthorName: '',
+  gitAuthorEmail: '',
+  usernameSource: 'auto',
+  hasPgp: true,
+  hasSsh: false,
+}
+
+// A key that is stored but not yet sealing anything: the state the wizard is in
+// the moment after GeneratePGPKey returns and before a store exists. Set it
+// before the click, because the component re-reads CurrentSettings as part of
+// handling the same click.
+function keyStored(): void {
+  CurrentSettings.mockResolvedValue({...settingsDefaults, storePath: '', hasPgp: true})
+}
+
+async function type(label: string, value: string): Promise<void> {
+  await fireEvent.input(screen.getByLabelText(label), {target: {value}})
+}
+
+describe('setup wizard: generate a key', () => {
+  it('opens on the key step when there is no key, before any store exists', async () => {
+    blank()
+    render(App)
+
+    expect(await screen.findByRole('heading', {name: /Step 1 of 3/})).toHaveTextContent('Decryption key')
+    // A keyless machine can do nothing in step 2, so Next stays shut.
+    expect(screen.getByRole('button', {name: 'Next'})).toBeDisabled()
+  })
+
+  it('sends the typed identity, passphrase and lock password, then unlocks Next', async () => {
+    blank()
+    GeneratePGPKey.mockResolvedValue('0xFRESH')
+    render(App)
+    await screen.findByRole('heading', {name: /Step 1 of 3/})
+
+    await type('Name', 'Jane Doe')
+    await type('Email', 'jane@example.com')
+    await type('Passphrase for the key', 'key-pass')
+    await type('Repeat passphrase', 'key-pass')
+    await fireEvent.input(screen.getByLabelText('Lock password (protects all stored keys)'), {
+      target: {value: 'lock-pass'},
+    })
+    keyStored()
+    await fireEvent.click(screen.getByRole('button', {name: 'Generate key'}))
+
+    // The exact arguments: the passphrase is sealed under the lock password, and
+    // a generated key is never persisted anywhere else, so a wrong pair here is
+    // the difference between a usable vault and an unreadable one.
+    await waitFor(() =>
+      expect(GeneratePGPKey).toHaveBeenCalledWith('Jane Doe', 'jane@example.com', 'key-pass', 'lock-pass'),
+    )
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Next'})).not.toBeDisabled())
+  })
+
+  it('refuses mismatched passphrases without calling the backend', async () => {
+    blank()
+    render(App)
+    await screen.findByRole('heading', {name: /Step 1 of 3/})
+
+    await type('Email', 'jane@example.com')
+    await type('Passphrase for the key', 'one')
+    await type('Repeat passphrase', 'two')
+    await fireEvent.input(screen.getByLabelText('Lock password (protects all stored keys)'), {
+      target: {value: 'lock-pass'},
+    })
+    await fireEvent.click(screen.getByRole('button', {name: 'Generate key'}))
+
+    expect(await screen.findByText('The passphrases do not match')).toBeInTheDocument()
+    expect(GeneratePGPKey).not.toHaveBeenCalled()
+  })
+
+  it('refuses an empty email, which is the only required identity field', async () => {
+    blank()
+    render(App)
+    await screen.findByRole('heading', {name: /Step 1 of 3/})
+
+    // The button is shut until an email is there, so the guard in the handler is
+    // the thing under test here rather than the disabled attribute.
+    await type('Passphrase for the key', 'key-pass')
+    await type('Repeat passphrase', 'key-pass')
+    await fireEvent.input(screen.getByLabelText('Lock password (protects all stored keys)'), {
+      target: {value: 'lock-pass'},
+    })
+    expect(screen.getByRole('button', {name: 'Generate key'})).toBeDisabled()
+    expect(GeneratePGPKey).not.toHaveBeenCalled()
+  })
+
+  it('clears both passphrase fields after a key is sealed', async () => {
+    blank()
+    GeneratePGPKey.mockResolvedValue('0xFRESH')
+    render(App)
+    await screen.findByRole('heading', {name: /Step 1 of 3/})
+
+    await type('Email', 'jane@example.com')
+    await type('Passphrase for the key', 'key-pass')
+    await type('Repeat passphrase', 'key-pass')
+    await fireEvent.input(screen.getByLabelText('Lock password (protects all stored keys)'), {
+      target: {value: 'lock-pass'},
+    })
+    await fireEvent.click(screen.getByRole('button', {name: 'Generate key'}))
+
+    await waitFor(() => expect(GeneratePGPKey).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.getByLabelText('Passphrase for the key')).toHaveValue(''),
+    )
+    expect(screen.getByLabelText('Repeat passphrase')).toHaveValue('')
+    expect(screen.getByLabelText('Lock password (protects all stored keys)')).toHaveValue('')
+  })
+})
+
+describe('setup wizard: create a store', () => {
+  it('opens on the store step when a key exists but no store does', async () => {
+    blank()
+    render(App)
+    await screen.findByRole('heading', {name: /Step 1 of 3/})
+    GeneratePGPKey.mockResolvedValue('0xFRESH')
+    await type('Email', 'jane@example.com')
+    await type('Passphrase for the key', 'key-pass')
+    await type('Repeat passphrase', 'key-pass')
+    await fireEvent.input(screen.getByLabelText('Lock password (protects all stored keys)'), {
+      target: {value: 'lock-pass'},
+    })
+    keyStored()
+    await fireEvent.click(screen.getByRole('button', {name: 'Generate key'}))
+    await waitFor(() => expect(GeneratePGPKey).toHaveBeenCalled())
+
+    // A key and no store is the other unfinished state, and it lands on step 2
+    // rather than asking for a key that is already there.
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Next'})).not.toBeDisabled())
+    await fireEvent.click(screen.getByRole('button', {name: 'Next'}))
+
+    expect(await screen.findByRole('heading', {name: /Step 2 of 3/})).toHaveTextContent('Store')
+    // Nothing has created a store yet, so Next stays shut here too.
+    expect(screen.getByRole('button', {name: 'Create store'})).toBeDisabled()
+  })
+
+  it('resolves the folder name to a path and creates the store with the remote', async () => {
+    blank()
+    keyStored()
+    render(App)
+    await screen.findByRole('heading', {name: /Step 2 of 3/})
+
+    await type('Folder name', 'passwords')
+    await fireEvent.blur(screen.getByLabelText('Folder name'))
+    await waitFor(() => expect(DefaultStoreDir).toHaveBeenCalledWith('passwords'))
+    expect(await screen.findByText(/Will be created at C:\\data\\stores\\passwords/)).toBeInTheDocument()
+
+    await type('Git remote (optional, not contacted yet)', 'git@github.com:me/passwords.git')
+    await fireEvent.click(screen.getByRole('button', {name: 'Create store'}))
+
+    await waitFor(() =>
+      expect(CreateStore).toHaveBeenCalledWith('C:\\data\\stores\\passwords', 'git@github.com:me/passwords.git'),
+    )
+  })
+
+  it('sends an empty remote when none was typed, rather than a stray space', async () => {
+    blank()
+    keyStored()
+    render(App)
+    await screen.findByRole('heading', {name: /Step 2 of 3/})
+
+    await type('Folder name', 'passwords')
+    await fireEvent.blur(screen.getByLabelText('Folder name'))
+    await type('Git remote (optional, not contacted yet)', '   ')
+    await fireEvent.click(await screen.findByRole('button', {name: 'Create store'}))
+
+    await waitFor(() => expect(CreateStore).toHaveBeenCalledWith('C:\\data\\stores\\passwords', ''))
+  })
+
+  it('refuses a name carrying a separator instead of guessing a location', async () => {
+    blank()
+    DefaultStoreDir.mockResolvedValue('')
+    keyStored()
+    render(App)
+    await screen.findByRole('heading', {name: /Step 2 of 3/})
+
+    await type('Folder name', 'a/b')
+    await fireEvent.blur(screen.getByLabelText('Folder name'))
+
+    expect(await screen.findByText('Enter a plain folder name, not a path with separators')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Create store'})).toBeDisabled()
+    expect(CreateStore).not.toHaveBeenCalled()
+  })
+
+  it('shows a backend refusal in the wizard instead of closing it', async () => {
+    blank()
+    keyStored()
+    CreateStore.mockRejectedValue('C:\\data\\stores\\passwords is not empty and is not a pass store; refusing to create a store in it')
+    render(App)
+    await screen.findByRole('heading', {name: /Step 2 of 3/})
+
+    await type('Folder name', 'passwords')
+    await fireEvent.blur(screen.getByLabelText('Folder name'))
+    await fireEvent.click(await screen.findByRole('button', {name: 'Create store'}))
+
+    expect(await screen.findByText(/is not empty and is not a pass store/)).toBeInTheDocument()
+    // The wizard stays open with the name still in the field: the user chose that
+    // folder, and the refusal is about its contents, not its name.
+    expect(screen.getByLabelText('Folder name')).toHaveValue('passwords')
+  })
+})
+
+describe('after creating a store', () => {
+  // The end of the from-scratch journey: a store exists and holds nothing yet.
+  // Listing an empty store must settle on "No entries", not sit on the loading
+  // placeholder, which is what a listing that never resolved would look like.
+  it('settles on the empty state instead of the loading placeholder', async () => {
+    blank()
+    keyStored()
+    ListPasswords.mockResolvedValue([])
+    render(App)
+    await screen.findByRole('heading', {name: /Step 2 of 3/})
+
+    await type('Folder name', 'passwords')
+    await fireEvent.blur(screen.getByLabelText('Folder name'))
+    await fireEvent.click(await screen.findByRole('button', {name: 'Create store'}))
+    await waitFor(() => expect(CreateStore).toHaveBeenCalled())
+
+    await fireEvent.click(screen.getByRole('button', {name: 'Next'}))
+    await screen.findByRole('heading', {name: /Step 3 of 3/})
+    await fireEvent.click(screen.getByRole('button', {name: 'Finish'}))
+
+    // The wizard is gone; the lock screen is what a not-yet-unlocked app shows.
+    await waitFor(() => expect(screen.queryByRole('heading', {name: /Step [123] of 3/})).not.toBeInTheDocument())
+    expect(screen.getByLabelText('Lock password')).toBeInTheDocument()
+  })
+
+  it('lists the new store once the session is unlocked', async () => {
+    blank()
+    keyStored()
+    ListPasswords.mockResolvedValue([])
+    render(App)
+    await screen.findByRole('heading', {name: /Step 2 of 3/})
+    await type('Folder name', 'passwords')
+    await fireEvent.blur(screen.getByLabelText('Folder name'))
+    await fireEvent.click(await screen.findByRole('button', {name: 'Create store'}))
+    await waitFor(() => expect(CreateStore).toHaveBeenCalled())
+    await fireEvent.click(screen.getByRole('button', {name: 'Next'}))
+    await screen.findByRole('heading', {name: /Step 3 of 3/})
+    await fireEvent.click(screen.getByRole('button', {name: 'Finish'}))
+
+    await screen.findByLabelText('Lock password')
+    await fireEvent.input(screen.getByLabelText('Lock password'), {target: {value: 'lock-pass'}})
+    await fireEvent.click(screen.getByRole('button', {name: /Unlock/}))
+    emit('passone:unlocked')
+
+    // The store is empty, so the list is empty. "Loading…" here would mean a
+    // listing promise that never settled.
+    expect(await screen.findByText('No entries')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/Loading/)).not.toBeInTheDocument())
+  })
+
+  // The placeholder is keyed on "has this store ever been listed", not on "is a
+  // listing running". An empty store is the state a new store stays in until its
+  // first entry, so keying it on `listing` gave it no honest text but
+  // "Loading…" — and any refresh still in flight when the vault screen painted
+  // (the unlock path fires two) sat there for good.
+  it('never shows the loading placeholder once a store has been listed empty', async () => {
+    vault()
+    ListPasswords.mockResolvedValue([])
+    render(App)
+    expect(await screen.findByText('No entries')).toBeInTheDocument()
+
+    // With the mock held open, the tree sits on an in-flight listing with
+    // nothing behind it, which is exactly the state the old condition rendered
+    // "Loading…" in. The refresh button is the busy indicator instead.
+    const pending = deferred<string[]>()
+    ListPasswords.mockReturnValue(pending.promise)
+    await fireEvent.click(screen.getByTitle('Refresh list'))
+    await waitFor(() => expect(screen.getByTitle('Refresh list')).toBeDisabled())
+    expect(screen.getByText('No entries')).toBeInTheDocument()
+    expect(screen.queryByText(/Loading/)).not.toBeInTheDocument()
+
+    pending.resolve(['fresh-entry'])
+    expect(await screen.findByTitle('fresh-entry')).toBeInTheDocument()
+  })
+
+  it('shows the loading placeholder before the first listing of a store', async () => {
+    // The one case where "Loading…" is the truth: nothing has been listed yet.
+    const pending = deferred<string[]>()
+    IsUnlocked.mockResolvedValue(true)
+    ListPasswords.mockReturnValue(pending.promise)
+    render(App)
+
+    expect(await screen.findByText(/Loading/)).toBeInTheDocument()
+    pending.resolve([])
+    expect(await screen.findByText('No entries')).toBeInTheDocument()
+  })
+
+  // A store switch left the previous store's rows on screen and never re-listed,
+  // so a store created in the wizard was invisible until a manual refresh. The
+  // selection has to go with it: it names an entry in the store just left.
+  it('re-lists and drops the selection when the app switches store', async () => {
+    IsUnlocked.mockResolvedValue(true)
+    ListPasswords.mockResolvedValue(['github/personal'])
+    // A key that seals a store which a later step replaces: the settings modal
+    // offers the create form exactly while no store is configured.
+    CurrentSettings.mockResolvedValue({...settingsDefaults, storePath: '', hasPgp: true})
+    render(App)
+    await selectEntry()
+    await screen.findByRole('heading', {name: /Step 2 of 3/})
+
+    ListPasswords.mockResolvedValue([])
+    await type('Folder name', 'second')
+    await fireEvent.blur(screen.getByLabelText('Folder name'))
+    await fireEvent.click(await screen.findByRole('button', {name: 'Create store'}))
+    await waitFor(() => expect(CreateStore).toHaveBeenCalled())
+
+    // The old store's entry is gone from the tree and from the detail pane, and
+    // the new store's empty listing is what the nav reports.
+    expect(await screen.findByText('No entries')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByTitle('github/personal')).not.toBeInTheDocument())
+    expect(screen.queryByRole('heading', {level: 2, name: 'github/personal'})).not.toBeInTheDocument()
+  })
+
+  it('re-expands directories of a newly switched store', async () => {
+    // The expanded set still named directories in the old store, so a new
+    // store's folders would render collapsed with no way back: expandAll only
+    // ever ran once per session.
+    IsUnlocked.mockResolvedValue(true)
+    ListPasswords.mockResolvedValue(['old/entry', 'shared/entry'])
+    CurrentSettings.mockResolvedValue({...settingsDefaults, storePath: '', hasPgp: true})
+    render(App)
+    await screen.findByTitle('old/entry')
+    await screen.findByRole('heading', {name: /Step 2 of 3/})
+
+    ListPasswords.mockResolvedValue(['fresh/entry'])
+    await type('Folder name', 'second')
+    await fireEvent.blur(screen.getByLabelText('Folder name'))
+    await fireEvent.click(await screen.findByRole('button', {name: 'Create store'}))
+    await waitFor(() => expect(CreateStore).toHaveBeenCalled())
+
+    expect(await screen.findByTitle('fresh/entry')).toBeInTheDocument()
   })
 })

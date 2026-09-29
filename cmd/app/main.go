@@ -15,6 +15,8 @@ Usage: passone <command> [arguments]
 
 Store / keys
   init                         Create the application data directory
+  gen-pgp-key [name] [email]   Generate a new OpenPGP key (no gpg needed)
+  init-store <dir> [remote]    Create a new local pass store (optional SSH git remote)
   import-pgp-key <file>        Import an armored OpenPGP private key
   import-ssh-key <file>        Import an OpenSSH private key (~/.ssh/id_ed25519)
   public-key                   Print the SSH public key (add it to GitHub)

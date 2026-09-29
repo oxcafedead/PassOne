@@ -20,7 +20,8 @@ Unlike most clients, it does **not** need `gpg.exe`, `git.exe`, or `ssh.exe` ins
 ## Features
 
 - 🪟 **Native GUI** — system tray, single window, light/dark theme support, single-instance lock.
-- 🔐 **OpenPGP built-in** — import private PGP keys and encrypt/decrypt `*.gpg` files via [`ProtonMail/go-crypto`](https://github.com/ProtonMail/go-crypto).
+- 🔐 **OpenPGP built-in** — generate a new private PGP key or import an existing one, and encrypt/decrypt `*.gpg` files via [`ProtonMail/go-crypto`](https://github.com/ProtonMail/go-crypto).
+- 🆕 **Create your own store** — from nothing to a working vault in two steps: generate a key, then create a pass store (optionally with a git remote) without a separate `pass init`.
 - 🗝️ **SSH built-in** — import OpenSSH private keys (`ed25519`, RSA), verify host keys, manage `known_hosts`, and sync over SSH via [`go-git`](https://github.com/go-git/go-git).
 - 📂 **Pass-compatible** — reads and writes standard pass stores: `.gpg-id`, folders, and `*.gpg` files.
 - 🔄 **Git sync** — `clone`, `status`, and `sync` (fetch/pull/push) without an external git installation.
@@ -80,12 +81,14 @@ go build -o passone.exe ./cmd/app
 
 ## Quick start
 
-1. Run `passone-ui.exe`.
-2. Import your PGP and SSH keys in the settings screen.
-3. Open an existing pass store or clone one over SSH.
+1. Run `passone-ui.exe`. On a machine with nothing set up, the setup wizard opens by itself.
+2. **Decryption key.** Import an existing OpenPGP private key, or — if you do not have one and do not want to run `gpg` — let PassOne generate a new key for you. Give it a name, an email, and a passphrase. The key is sealed under your lock password and never written anywhere else, so **the passphrase is unrecoverable if you lose it**; import a key instead if you want a copy you control.
+3. **Store.** Open a store folder that already exists, clone one over SSH, or create a new one: type a folder name, optionally add a git remote, and PassOne writes the `.gpg-id`, initialises git on `main` and makes the first commit. A remote you enter is recorded but not contacted — the first **Sync** is the push, so nothing leaves the machine until you ask for it.
 4. Unlock the store; browse, copy, add, and edit passwords from the app.
 5. PassOne lives in the system tray — closing the window hides it; quit from the tray menu.
 6. The session auto-locks after a period of inactivity (configurable).
+
+A store created this way is a normal `pass` store: any `pass` client with the same OpenPGP key can read it, and a store created elsewhere with `pass init` opens here unchanged.
 
 Data is stored in `%LOCALAPPDATA%\PassOne` by default. You can override this with the `PASSONE_DIR` environment variable.
 
@@ -107,14 +110,19 @@ The CLI predates the GUI and is kept mainly for scripting; it exposes the same c
 
 ```powershell
 .\passone.exe init
+.\passone.exe gen-pgp-key "Jane Doe" jane@example.com
+.\passone.exe init-store .\pass-store git@github.com:you/passwords.git
 .\passone.exe import-pgp-key .\private-key.asc
 .\passone.exe open .\pass-store
 .\passone.exe unlock
 .\passone.exe list
 .\passone.exe show github/personal
 .\passone.exe copy github/personal
+.\passone.exe sync
 .\passone.exe lock
 ```
+
+`gen-pgp-key` and `init-store` are the from-scratch path, mirroring the wizard: the first generates an OpenPGP key (asking for the key passphrase twice, because a generated key exists only in the sealed vault) and the second creates a pass store encrypted to it. `init-store` asks for the lock password first — a store is encrypted to a key that has to be in memory — and never contacts the remote, so the first `sync` is the push.
 
 Full command reference:
 
@@ -123,6 +131,8 @@ Usage: passone <command> [arguments]
 
 Store / keys
   init                         Create the application data directory
+  gen-pgp-key [name] [email]   Generate a new OpenPGP key (no gpg needed)
+  init-store <dir> [remote]    Create a new local pass store (optional SSH git remote)
   import-pgp-key <file>        Import an armored OpenPGP private key
   import-ssh-key <file>        Import an OpenSSH private key
   public-key                   Print the SSH public key (add it to GitHub)

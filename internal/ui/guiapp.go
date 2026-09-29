@@ -527,6 +527,37 @@ func (g *GUI) ImportSSHKeyFile(path, passphrase, lockPassword string) (string, e
 	return fmt.Sprintf("Imported SSH key %s / %s", k.Algorithm(), k.Fingerprint()), nil
 }
 
+// GeneratePGPKey creates a new OpenPGP key and takes it through the same
+// import path an imported key uses, sealing it under lockPassword. It returns
+// the fingerprint, which the wizard shows so the user has written it down
+// before putting a password in the store: the generated key exists nowhere but
+// the sealed vault, and the passphrase is the only way back to it.
+func (g *GUI) GeneratePGPKey(name, email, passphrase, lockPassword string) (string, error) {
+	infos, err := g.core.GeneratePGPKey(name, email, []byte(passphrase), []byte(lockPassword))
+	if err != nil {
+		return "", err
+	}
+	if len(infos) == 0 {
+		return "", errors.New("no OpenPGP key was generated")
+	}
+	return infos[0].Fingerprint, nil
+}
+
+// CreateStore creates a new pass store in an empty folder, encrypted to the
+// OpenPGP key the app holds, and makes it the active store. remote is optional
+// and is recorded without being contacted; the first Sync pushes to it.
+func (g *GUI) CreateStore(path, remote string) error {
+	return g.core.CreateStore(strings.TrimSpace(path), strings.TrimSpace(remote))
+}
+
+// DefaultStoreDir turns the name typed into the wizard's folder field into a
+// path under the application stores directory. It returns "" when the name
+// cannot be used, so the UI can refuse rather than create a store somewhere the
+// user did not ask for.
+func (g *GUI) DefaultStoreDir(name string) string {
+	return g.core.DefaultStoreDir(name)
+}
+
 // OpenLocalStore validates a local pass store directory and records it as the
 // active store.
 func (g *GUI) OpenLocalStore(path string) error {

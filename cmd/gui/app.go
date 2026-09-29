@@ -117,6 +117,21 @@ func (a *App) ImportSSHKeyFile(path, passphrase, lockPassword string) (string, e
 	return a.gui.ImportSSHKeyFile(path, passphrase, lockPassword)
 }
 
+// GeneratePGPKey creates a new OpenPGP key and seals it under lockPassword,
+// returning its fingerprint.
+func (a *App) GeneratePGPKey(name, email, passphrase, lockPassword string) (string, error) {
+	return a.gui.GeneratePGPKey(name, email, passphrase, lockPassword)
+}
+
+// CreateStore creates a new pass store in an empty folder, encrypted to the
+// OpenPGP key the app holds, and activates it. The remote is optional and is
+// recorded without being contacted.
+func (a *App) CreateStore(path, remote string) error { return a.gui.CreateStore(path, remote) }
+
+// DefaultStoreDir resolves a store name typed in the wizard into a path under
+// the app stores directory, or "" when the name cannot be used.
+func (a *App) DefaultStoreDir(name string) string { return a.gui.DefaultStoreDir(name) }
+
 // HasSSHKeyLoaded reports whether the SSH signer is in memory for transport.
 func (a *App) HasSSHKeyLoaded() bool { return a.gui.HasSSHKeyLoaded() }
 

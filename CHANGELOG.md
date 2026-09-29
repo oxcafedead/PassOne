@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Key generation and store creation, without `gpg` or `pass init`.** A user
+  with nothing on their machine could previously only clone a store somebody else
+  had created, so the app was unusable without an existing `pass` installation
+  and an armored key file. `pgp.Generate` now creates an Ed25519/Curve25519 key
+  (AES-256, SHA-256) and the setup wizard offers it next to the import, and
+  `CreateStore` writes a complete pass store: `.gpg-id` naming the key,
+  a git repository on `main`, and a first commit — so the result lists entries,
+  syncs, and clones on another machine like any other. A git remote is optional
+  and is **recorded but not contacted**; the first Sync is the push, so creating
+  a store neither depends on a server being reachable nor publishes an empty
+  vault. The CLI gains `gen-pgp-key [name] [email]` and
+  `init-store <dir> [remote]` for the same journey.
+- The setup wizard now asks for the decryption key **before** the store, because
+  a new store is encrypted to that key: the previous order left a first-run user
+  with nothing they could do in step 2. It also opens at whichever step still
+  needs work, and the create form shows the resolved path before anything is
+  written.
+
 ### Security
+
+- A generated OpenPGP key is stored only in the app's sealed vault, so its
+  passphrase is unrecoverable if lost. The CLI asks for it twice, the wizard
+  confirms it and says so on the form, and `GeneratePGPKey` refuses to run over an
+  existing stored or resident key so a store that already names it cannot be
+  orphaned.
 
 - Copied secrets can still reach Windows Clipboard History and the cloud
   clipboard, which the auto-clear could never fix: both snapshot an item at
@@ -101,6 +127,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A store holding no entries showed "Loading…" forever. The tree placeholder
+  keyed on "a listing is running", but rows only ever fill from a listing, so an
+  empty store's nav had no branch to reach but the placeholder — and the unlock
+  path starts two listings as the vault screen paints. The placeholder now means
+  "this store has never been listed", so an empty store says "No entries" and the
+  refresh button carries the busy state; a listing that failed counts as
+  answered, because the error is on screen.
+- Switching stores left the previous store's entries on screen and never
+  re-listed. Creating, opening or cloning a store switched the backend's active
+  store while the tree kept the old rows and selection, and `expandAll` only ever
+  ran once, so the new store's folders rendered collapsed. A switch now clears
+  the rows, tree, selection, expanded set and detail pane and re-lists.
 - The lock screen cut the paths it exists to show. The Data dir and the store
   were `truncate`d in a narrow column with no `title` and no way to recover what
   was lost. Each is now a row that elides the *middle* of a long path, never the

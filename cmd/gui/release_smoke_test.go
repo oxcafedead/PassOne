@@ -280,6 +280,160 @@ func TestReleaseSmokeFreshInstall(t *testing.T) {
 	}
 }
 
+// TestReleaseSmokeGenerateAndCreate covers the from-scratch journey the wizard
+// offers a machine that has neither an OpenPGP key nor a store: generate a key,
+// create a store encrypted to it, and work. It is the only path in the app where
+// key material is born on the machine, so it gets the same anti-bricking
+// treatment as an import: a restart must still be able to decrypt what the
+// generated key sealed.
+func TestReleaseSmokeGenerateAndCreate(t *testing.T) {
+	dataDir := t.TempDir()
+	app := newSmokeApp(t, dataDir)
+
+	t.Run("CreateStoreNeedsAKeyFirst", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "store")
+		if err := app.CreateStore(dir, ""); err == nil {
+			t.Fatal("CreateStore succeeded with no OpenPGP key; the store would be undecryptable")
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".gpg-id")); err == nil {
+			t.Error("a refused CreateStore left a .gpg-id behind")
+		}
+	})
+
+	const keyPass = "generated-key-pass"
+	fp, err := app.GeneratePGPKey("Smoke Tester", "smoke@example.com", keyPass, smokeLockPassword)
+	if err != nil {
+		t.Fatalf("GeneratePGPKey: %v", err)
+	}
+	if fp == "" {
+		t.Fatal("GeneratePGPKey returned an empty fingerprint")
+	}
+	if got := app.CurrentSettings().PGPKeyFingerprint; got != fp {
+		t.Errorf("PGPKeyFingerprint = %q, want the generated %q", got, fp)
+	}
+	if app.IsUnlocked() {
+		t.Error("generating a key must leave the session locked, like an import")
+	}
+
+	// The wizard resolves the typed folder name to a path before creating
+	// anything, so the value the user is shown is the value the store lands in.
+	wantDir := app.DefaultStoreDir("pass")
+	if wantDir == "" {
+		t.Fatal("DefaultStoreDir(\"pass\") = \"\"")
+	}
+	if got := app.DefaultStoreDir("a/b"); got != "" {
+		t.Errorf("DefaultStoreDir(\"a/b\") = %q, want \"\" so the UI refuses", got)
+	}
+	if got := app.DefaultStoreDir(""); got == "" {
+		t.Error("DefaultStoreDir(\"\") = \"\", want the app stores directory")
+	}
+
+	remote := "git@github.com:smoke/pass.git"
+	if err := app.CreateStore(wantDir, remote); err != nil {
+		t.Fatalf("CreateStore: %v", err)
+	}
+
+	settings := app.CurrentSettings()
+	if settings.StorePath != wantDir {
+		t.Errorf("StorePath = %q, want %q", settings.StorePath, wantDir)
+	}
+	if settings.GitRemote != remote {
+		t.Errorf("GitRemote = %q, want %q", settings.GitRemote, remote)
+	}
+	// A remote is recorded, never contacted: creating a store must not depend on
+	// a server being reachable, and it must not publish an empty vault.
+	if _, err := os.Stat(filepath.Join(wantDir, ".git")); err != nil {
+		t.Errorf("the created store is not a git repository: %v", err)
+	}
+
+	st, err := store.Open(wantDir)
+	if err != nil {
+		t.Fatalf("store.Open on the created store: %v", err)
+	}
+	if ids := st.GPGIDs(); len(ids) != 1 || ids[0] != fp {
+		t.Errorf(".gpg-id = %v, want the generated fingerprint %q", ids, fp)
+	}
+
+	// The wizard's own next step lists the store it just created, on the process
+	// that created it, before the session is ever unlocked. Listing is the call
+	// the vault screen's first paint waits on, so it is the one that has to
+	// return an empty tree rather than a promise that never settles.
+	names, err := app.ListPasswords()
+	if err != nil {
+		t.Fatalf("ListPasswords on the created store: %v", err)
+	}
+	if len(names) != 0 {
+		t.Errorf("a store created this second lists %v, want nothing yet", names)
+	}
+
+	if err := app.Unlock(smokeLockPassword); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if names, err = app.ListPasswords(); err != nil || len(names) != 0 {
+		t.Errorf("ListPasswords after Unlock = %v (%v), want an empty list", names, err)
+	}
+	if _, err := app.CreatePassword("github/personal", "hunter2", "hunter2", "url: https://github.com\n"); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	plain, err := app.ShowPassword("github/personal")
+	if err != nil {
+		t.Fatalf("ShowPassword: %v", err)
+	}
+	if plain != "hunter2\nurl: https://github.com\n" {
+		t.Fatalf("ShowPassword = %q", plain)
+	}
+
+	t.Run("FreshProcessReadsTheGeneratedKey", func(t *testing.T) {
+		// The generated key exists only in the sealed vault, so a restart that
+		// cannot decrypt with it means the vault is unreadable forever.
+		restarted := newSmokeApp(t, dataDir)
+		if err := restarted.Unlock(smokeLockPassword); err != nil {
+			t.Fatalf("fresh Unlock: %v", err)
+		}
+		got, err := restarted.ShowPassword("github/personal")
+		if err != nil {
+			t.Fatalf("ShowPassword after restart: %v", err)
+		}
+		if got != plain {
+			t.Errorf("entry after restart = %q, want %q", got, plain)
+		}
+	})
+
+	t.Run("SecondKeyAndSecondStoreAreRefused", func(t *testing.T) {
+		if _, err := app.GeneratePGPKey("Other", "other@example.com", keyPass, smokeLockPassword); err == nil {
+			t.Error("GeneratePGPKey overwrote an existing key; a store may name it")
+		}
+		// A second store in a fresh folder is legitimate; over the first one is
+		// not, and the refusal must leave the original readable.
+		if err := app.CreateStore(wantDir, ""); err == nil {
+			t.Error("CreateStore overwrote an existing store")
+		}
+		again, err := app.ShowPassword("github/personal")
+		if err != nil {
+			t.Fatalf("ShowPassword after the refusal: %v", err)
+		}
+		if again != plain {
+			t.Errorf("a refused CreateStore changed the entry: %q", again)
+		}
+	})
+
+	t.Run("RefusesADirectoryHoldingSomethingElse", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("mine"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.CreateStore(dir, ""); err == nil {
+			t.Fatal("CreateStore wrote into a directory holding unrelated files")
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".gpg-id")); err == nil {
+			t.Error("a refused CreateStore left a .gpg-id behind")
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			t.Error("a refused CreateStore left a .git directory behind")
+		}
+	})
+}
+
 // TestReleaseSmokeStoreLifecycle walks opening a store and driving every entry
 // operation the UI exposes, in the order the vault screen does it.
 func TestReleaseSmokeStoreLifecycle(t *testing.T) {

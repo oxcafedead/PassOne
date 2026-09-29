@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -46,6 +47,8 @@ func commands() map[string]func(*env, []string) error {
 		},
 
 		"init":           cmdInit,
+		"gen-pgp-key":    cmdGenPGPKey,
+		"init-store":     cmdInitStore,
 		"import-pgp-key": cmdImportPGP,
 		"import-ssh-key": cmdImportSSH,
 		"public-key":     cmdPublicKey,
@@ -76,6 +79,91 @@ func commands() map[string]func(*env, []string) error {
 
 func cmdInit(e *env, _ []string) error {
 	e.printf("Application data directory: %s\n", e.app.DataDir())
+	return nil
+}
+
+// cmdGenPGPKey generates a new OpenPGP key, the alternative to importing one
+// for a user who does not already have gpg set up. The key is sealed in the
+// vault exactly as an imported one is, so the rest of the CLI cannot tell the
+// two apart.
+func cmdGenPGPKey(e *env, args []string) error {
+	pos := positional(args)
+	if len(pos) > 2 {
+		return errors.New("gen-pgp-key takes at most a name and an email address")
+	}
+	name, email := "", ""
+	if len(pos) > 0 {
+		name = pos[0]
+	} else {
+		name = string(readPassphrase(e, "Name (may be empty): "))
+	}
+	if len(pos) > 1 {
+		email = pos[1]
+	} else {
+		email = string(readPassphrase(e, "Email address: "))
+	}
+	if strings.TrimSpace(email) == "" {
+		return errors.New("an email address is required")
+	}
+
+	// The passphrase is asked for twice, unlike an import, because a generated
+	// key exists nowhere but this machine's sealed vault: there is no file to
+	// re-read it from and no other copy of it anywhere.
+	e.println("The key is generated on this machine and stored only in the sealed vault.")
+	pass := readPassphrase(e, "Passphrase for the OpenPGP key: ")
+	if len(pass) == 0 {
+		return errors.New("a non-empty key passphrase is required")
+	}
+	defer zero(pass)
+	again := readPassphrase(e, "Repeat it: ")
+	defer zero(again)
+	if !bytes.Equal(pass, again) {
+		return errors.New("the passphrases do not match")
+	}
+
+	lockPass := readPassphrase(e, "Lock password (used to seal all stored keys): ")
+	if len(lockPass) == 0 {
+		return errors.New("a non-empty lock password is required")
+	}
+	defer zero(lockPass)
+
+	infos, err := e.app.GeneratePGPKey(name, email, pass, lockPass)
+	if err != nil {
+		return err
+	}
+	printKeyInfos(e, infos)
+	e.println("Key generated and sealed locally.")
+	e.println("Write the fingerprint down: it identifies the key your store is encrypted to.")
+	return nil
+}
+
+// cmdInitStore creates a new local pass store, the alternative to cloning an
+// existing one. The directory must be empty; a remote is optional and is
+// recorded without being contacted, so the first `sync` is the push.
+func cmdInitStore(e *env, args []string) error {
+	pos := positional(args)
+	if len(pos) < 1 {
+		return errors.New("init-store requires a directory argument")
+	}
+	remote := ""
+	if len(pos) > 1 {
+		remote = pos[1]
+	}
+	// A store is encrypted to the loaded OpenPGP key, so the key has to be in
+	// memory before the store is created.
+	if err := ensurePGPUnlocked(e); err != nil {
+		return err
+	}
+	if err := e.app.CreateStore(pos[0], remote); err != nil {
+		return err
+	}
+	e.printf("Store created and opened: %s\n", e.app.StorePath())
+	if strings.TrimSpace(remote) != "" {
+		e.printf("Remote recorded (not contacted yet): %s\n", strings.TrimSpace(remote))
+		e.println("Run 'sync' to push it.")
+	} else {
+		e.println("No remote configured. Add one later and run 'sync'.")
+	}
 	return nil
 }
 

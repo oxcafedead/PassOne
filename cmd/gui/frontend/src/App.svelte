@@ -21,6 +21,9 @@
     PickPrivateKey,
     PickStoreDir,
     ImportPGPKeyFile,
+    GeneratePGPKey,
+    CreateStore,
+    DefaultStoreDir,
     ImportSSHKeyFile,
     HasSSHKeyLoaded,
     LoadSSHKey,
@@ -101,6 +104,15 @@
   let entries: string[] = []
   let query: string = ''
   let listing: boolean = false
+  // Whether a listing has ever landed. An empty store is a normal state and
+  // "No entries" says so, so the loading placeholder must mean "not known yet"
+  // rather than "a listing is running": keying it on `listing` alone left an
+  // empty store with no honest text to show but "Loading…", because that is the
+  // only branch its empty rows can reach. Any listing still in flight when the
+  // vault screen painted — which the unlock path starts twice over, once from
+  // the event handler and once from the unlock button — then sat there over a
+  // list that was never going to grow.
+  let listed: boolean = false
   let selected: string | null = null
   let detail: string = ''
   let revealed: boolean = false
@@ -186,6 +198,22 @@
   let onboarding: boolean = false
   let step: number = 0
 
+  // Key generation and store creation. Both are for a machine that has neither a
+  // key nor a store yet, which is the state the wizard opens in on a first run.
+  let genName: string = ''
+  let genEmail: string = ''
+  let genPass: string = ''
+  let genConfirm: string = ''
+  let genBusy: boolean = false
+  let newStoreName: string = ''
+  let newStorePath: string = ''
+  let newStoreRemote: string = ''
+  let storeBusy: boolean = false
+
+  // Wizard step names, used both for the heading and for the progress bars'
+  // tooltips, so the two can never describe different steps.
+  const stepTitles = ['Decryption key', 'Store', 'Preferences']
+
   function flash(msg: string, isError: boolean = false): void {
     status = msg
     statusError = isError
@@ -199,12 +227,14 @@
 
   $: filtered = entries.filter((e) => e.toLowerCase().includes(query.toLowerCase()))
 
-  // Setup wizard: step 0 needs either an open store (local) or both an SSH key
-  // and a store (for cloning). Step 1 requires a PGP key to decrypt passwords.
+  // Setup wizard: step 0 requires an OpenPGP key. It comes first because a new
+  // store is encrypted to that key, so there is nothing to create in step 1
+  // without it. Step 1 requires a store from somewhere: opened, cloned, or
+  // created here.
   $: canNext = step === 0
-    ? (sw.storePath !== '' || sw.hasSsh) && !cloneBusy && !openBusy && !importBusy
+    ? sw.hasPgp && !importBusy && !genBusy
     : step === 1
-      ? sw.hasPgp && !importBusy
+      ? sw.storePath !== '' && !cloneBusy && !openBusy && !storeBusy
       : true
 
   // Tree model derived from the flat entry paths.
@@ -366,7 +396,28 @@
       flash(String(e), true)
     } finally {
       listing = false
+      // A listing that failed still answered the question: the list is known,
+      // and the error is on screen. Treating that as "still unknown" is what
+      // would park the tree on the placeholder for good.
+      listed = true
     }
+  }
+
+  // adoptStore re-lists after the app has switched which store is open. The rows
+  // on screen belong to the store the user just left, and nothing else in the
+  // app re-lists on a switch, so a store created here was never shown at all.
+  async function adoptStore(): Promise<void> {
+    entries = []
+    tree = []
+    rows = []
+    listed = false
+    selected = null
+    detail = ''
+    revealed = false
+    // The expanded set still names directories in the old store, so a new store
+    // would render every folder collapsed and expandAll would never re-run.
+    expandedInitialized = false
+    await refresh()
   }
 
   async function syncAndRefresh(): Promise<void> {
@@ -748,15 +799,15 @@
 
   // Landing point when something is unfinished: jump straight into the wizard
   // at the step that still needs work instead of a dead unlock screen.
-  //  - missing store → step 1 (repository) — SSH is optional for local stores
-  //  - otherwise a missing PGP key → step 2 (decrypt)
+  //  - no OpenPGP key → step 0 (generate or import one; a store is encrypted to it)
+  //  - otherwise a missing store → step 1 (open, clone, or create)
   //  - everything in place → no wizard.
   async function openSettingsIfFirstRun(): Promise<void> {
     await loadSettings()
     let start: number | null = null
-    if (!sw.storePath) {
+    if (!sw.hasPgp) {
       start = 0
-    } else if (!sw.hasPgp) {
+    } else if (!sw.storePath) {
       start = 1
     }
     if (start !== null) {
@@ -780,6 +831,13 @@
     cpwNew = ''
     cpwConfirm = ''
     cpwErr = ''
+    genName = ''
+    genEmail = ''
+    genPass = ''
+    genConfirm = ''
+    newStoreName = ''
+    newStorePath = ''
+    newStoreRemote = ''
   }
 
   async function pickPgp(): Promise<void> {
@@ -826,6 +884,98 @@
       flash(setupErr, true)
     } finally {
       importBusy = false
+    }
+  }
+
+  // generateKey is the no-gpg path: a machine with no key anywhere gets one
+  // here. The passphrase is confirmed because this key is not recoverable from
+  // anywhere else once it is sealed -- an imported key still exists as a file
+  // the user chose, a generated one exists only in the vault.
+  async function generateKey(): Promise<void> {
+    if (genEmail.trim() === '') {
+      setupErr = 'An email address is required'
+      flash(setupErr, true)
+      return
+    }
+    if (genPass === '') {
+      setupErr = 'A non-empty passphrase is required for the new key'
+      flash(setupErr, true)
+      return
+    }
+    if (genPass !== genConfirm) {
+      setupErr = 'The passphrases do not match'
+      flash(setupErr, true)
+      return
+    }
+    if (lockPass === '') {
+      setupErr = 'A lock password is required to seal the new key'
+      flash(setupErr, true)
+      return
+    }
+    genBusy = true
+    setupErr = ''
+    try {
+      const fp = await GeneratePGPKey(genName.trim(), genEmail.trim(), genPass, lockPass)
+      genPass = ''
+      genConfirm = ''
+      lockPass = ''
+      flash('Key generated: ' + fp)
+      await loadSettings()
+    } catch (e) {
+      setupErr = String(e)
+      flash(setupErr, true)
+    } finally {
+      genBusy = false
+    }
+  }
+
+  // resolveNewStorePath turns the folder field into the path the store would be
+  // created at, so the user sees where it lands before creating anything. A
+  // name with a separator in it comes back empty and the button stays disabled
+  // rather than the app inventing a location.
+  async function resolveNewStorePath(): Promise<void> {
+    const name = newStoreName.trim()
+    if (name === '') {
+      newStorePath = ''
+      setupErr = ''
+      return
+    }
+    try {
+      newStorePath = (await DefaultStoreDir(name)) ?? ''
+      if (newStorePath === '') {
+        setupErr = 'Enter a plain folder name, not a path with separators'
+        flash(setupErr, true)
+      } else {
+        setupErr = ''
+      }
+    } catch (e) {
+      newStorePath = ''
+      setupErr = String(e)
+      flash(setupErr, true)
+    }
+  }
+
+  async function createStore(): Promise<void> {
+    if (newStorePath === '') {
+      setupErr = 'Enter a folder name for the new store'
+      flash(setupErr, true)
+      return
+    }
+    storeBusy = true
+    setupErr = ''
+    try {
+      await CreateStore(newStorePath, newStoreRemote.trim())
+      flash('Store created: ' + newStorePath)
+      newStoreName = ''
+      newStorePath = ''
+      newStoreRemote = ''
+      await loadSettings()
+      await adoptStore()
+    } catch (e) {
+      setupErr = String(e)
+      flash(setupErr, true)
+    } finally {
+      storeBusy = false
     }
   }
 
@@ -880,6 +1030,7 @@
       await OpenLocalStore(r.path)
       flash('Store opened: ' + r.path)
       await loadSettings()
+      await adoptStore()
     } catch (e) {
       setupErr = String(e)
       flash(setupErr, true)
@@ -895,6 +1046,7 @@
       await OpenLocalStore(p)
       flash('Store opened: ' + p)
       await loadSettings()
+      await adoptStore()
     } catch (e) {
       setupErr = String(e)
       flash(setupErr, true)
@@ -945,9 +1097,7 @@
       clonePrep = null
       cloneUrl = ''
       await loadSettings()
-      if (unlocked) {
-        await refresh()
-      }
+      await adoptStore()
     } catch (e) {
       setupErr = String(e)
       flash(setupErr, true)
@@ -1301,12 +1451,13 @@
       </div>
 
       <nav class="flex-1 overflow-y-auto">
-        <!-- The placeholder must never replace a populated list: this is the
-        scroll container, so blanking it collapses scrollHeight and the browser
-        clamps scrollTop to 0, throwing the user back to the top on every
-        refresh (GH #33). rows still holds the previous listing until the new
-        one lands, so it is empty only before the first list arrives. -->
-        {#if listing && rows.length === 0}
+        <!-- The placeholder means "this store has never been listed", not "a
+        listing is running". Keying it on `listing` left a store holding nothing
+        with no honest text to show but "Loading…", because an empty row list is
+        all it has to render — and the unlock path starts two listings while the
+        vault screen paints. rows still holds the previous listing until a new one
+        lands, so a populated list is never replaced (GH #33). -->
+        {#if !listed && rows.length === 0}
           <p class="text-faint mt-2 px-1 text-xs">Loading…</p>
         {:else if query.trim()}
           {#if filtered.length === 0}
@@ -1611,7 +1762,7 @@
       <div class="flex items-center gap-2">
         <h3 class="text-main flex-1 text-sm font-semibold">
           {onboarding
-            ? 'Step ' + (step + 1) + ' of 3 · ' + ['Connect a repository', 'Decrypt passwords', 'Preferences'][step]
+            ? 'Step ' + (step + 1) + ' of 3 · ' + stepTitles[step]
             : 'Setup & settings'}
         </h3>
         <button on:click={closeSettings} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Close</button>
@@ -1619,7 +1770,7 @@
 
       {#if onboarding}
         <div class="flex items-center gap-1.5">
-          {#each ['Repository', 'Decrypt key', 'Preferences'] as label, i}
+          {#each stepTitles as label, i}
             <div
               class={'h-1.5 flex-1 rounded-full ' + (i <= step ? 'accent-soft' : 'panel ring-panel')}
               title={label}
@@ -1630,8 +1781,9 @@
         {#if step === 0}
           <section class="flex flex-col gap-2">
             <p class="text-faint text-xs leading-relaxed">
-              Open an existing store folder or clone one over SSH. An SSH key is
-              only required when cloning from a remote; local stores work without one.
+              Encrypted passwords are only readable with the matching OpenPGP secret key of
+              the store. Import a key you already have, or generate a new one here — the store
+              you create next is encrypted to it, and a generated key exists only in this app.
             </p>
 
             <label class="text-faint flex flex-col gap-1 text-xs">
@@ -1639,76 +1791,142 @@
               <input type="password" bind:value={lockPass} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
             </label>
 
-            <h4 class="text-mute mt-1 text-xs font-semibold tracking-wide uppercase">SSH key</h4>
-            {#if sw.hasSsh && sshLoaded}
+            {#if sw.hasPgp}
               <div class="flex items-center gap-2">
-                <span class="badge-success rounded-md px-2 py-1 text-xs">SSH key ready</span>
-                <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs">{sw.sshKeyId}</span>
-              </div>
-            {:else if sw.hasSsh}
-              <div class="flex items-center gap-2">
-                <span class="badge-success rounded-md px-2 py-1 text-xs">SSH key stored</span>
-                <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs">{sw.sshKeyId}</span>
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-faint text-xs">Passphrase to use the key (empty if your key has none)</span>
-                <div class="flex items-center gap-2">
-                  <input type="password" bind:value={sshPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
-                  <button
-                    on:click={sshLoad}
-                    disabled={importBusy}
-                    class="btn-accent rounded-lg px-3 py-2 text-sm"
-                  >
-                    {importBusy ? 'Loading…' : 'Load key'}
-                  </button>
-                </div>
+                <span class="badge-success rounded-md px-2 py-1 text-xs">PGP key ready</span>
+                <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs">{sw.pgpKeyFingerprint}</span>
               </div>
             {:else}
+              <h4 class="text-mute mt-1 text-xs font-semibold tracking-wide uppercase">Import an existing key</h4>
               <div class="flex items-center gap-2">
-                <button on:click={pickSsh} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose SSH key…</button>
+                <button on:click={pickPgp} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose PGP key…</button>
                 <span class="text-faint min-w-0 flex-1 truncate text-xs">
-                  {sshPicked || 'No SSH key imported'}
+                  {pgpPicked || 'No OpenPGP key selected'}
                 </span>
               </div>
               <div class="flex flex-col gap-1">
                 <span class="text-faint text-xs">Passphrase (empty if your key has none)</span>
                 <div class="flex items-center gap-2">
-                  <input type="password" bind:value={sshPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
+                  <input type="password" bind:value={pgpPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
                   <button
-                    on:click={importSsh}
-                    disabled={importBusy || !sshPicked}
+                    on:click={importPgp}
+                    disabled={importBusy || !pgpPicked}
                     class="btn-accent rounded-lg px-3 py-2 text-sm"
                   >
                     {importBusy ? 'Importing…' : 'Import'}
                   </button>
                 </div>
               </div>
-            {/if}
 
-            <h4 class="text-mute mt-2 text-xs font-semibold tracking-wide uppercase">Store</h4>
-            {#if sw.storePath}
-              <p class="text-faint truncate text-xs">
-                Current: <span class="text-sub font-mono">{sw.storePath}</span>
+              <h4 class="text-mute mt-2 text-xs font-semibold tracking-wide uppercase">… or generate a new key</h4>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="text-faint flex flex-col gap-1 text-xs">
+                  Name
+                  <input bind:value={genName} placeholder="Jane Doe" class="input rounded-lg px-3 py-2 text-sm"/>
+                </label>
+                <label class="text-faint flex flex-col gap-1 text-xs">
+                  Email
+                  <input type="email" bind:value={genEmail} placeholder="jane@example.com" class="input rounded-lg px-3 py-2 text-sm"/>
+                </label>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="text-faint flex flex-col gap-1 text-xs">
+                  Passphrase for the key
+                  <input type="password" bind:value={genPass} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+                </label>
+                <label class="text-faint flex flex-col gap-1 text-xs">
+                  Repeat passphrase
+                  <input type="password" bind:value={genConfirm} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+                </label>
+              </div>
+              <p class="text-faint text-xs leading-relaxed">
+                A generated key is stored only in the app's sealed vault. If you lose the
+                passphrase, nothing on this machine can decrypt the store again — write it down
+                or use an import instead.
               </p>
+              <button
+                on:click={generateKey}
+                disabled={genBusy || genEmail.trim() === '' || genPass === ''}
+                class="btn-accent w-fit rounded-lg px-3 py-2 text-sm"
+              >
+                {genBusy ? 'Generating…' : 'Generate key'}
+              </button>
+            {/if}
+          </section>
+        {:else if step === 1}
+          <section class="flex flex-col gap-2">
+            <p class="text-faint text-xs leading-relaxed">
+              Open a store that already exists, create a new one, or clone one over SSH. A new
+              store is encrypted to the OpenPGP key from the previous step; an SSH key is only
+              needed to reach a remote.
+            </p>
+
+            {#if sw.storePath}
+              <div class="flex items-center gap-2">
+                <span class="badge-success rounded-md px-2 py-1 text-xs">Store ready</span>
+                <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs" title={sw.storePath}>
+                  {sw.storePath}
+                </span>
+              </div>
               {#if sw.gitRemote}
                 <p class="text-faint truncate text-xs">
                   Remote: <span class="text-sub font-mono">{sw.gitRemote}</span>
                 </p>
               {/if}
-              <div class="flex items-center gap-2">
+              <div>
                 <button on:click={openStore} disabled={openBusy} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">
                   Open another folder…
                 </button>
-                <span class="badge-success rounded-md px-2 py-1 text-xs">Store ready</span>
               </div>
             {:else}
+              <h4 class="text-mute mt-1 text-xs font-semibold tracking-wide uppercase">Create a new store</h4>
+              <div class="flex flex-col gap-1">
+                <label class="text-faint flex flex-col gap-1 text-xs">
+                  Folder name
+                  <input
+                    bind:value={newStoreName}
+                    on:blur={resolveNewStorePath}
+                    on:keydown={(e) => { if (e.key === 'Enter') { void resolveNewStorePath() } }}
+                    placeholder="passwords"
+                    class="input rounded-lg px-3 py-2 font-mono text-sm"
+                  />
+                </label>
+                {#if newStorePath !== ''}
+                  <p class="text-faint font-mono text-xs break-all">Will be created at {newStorePath}</p>
+                {/if}
+              </div>
+              <label class="text-faint flex flex-col gap-1 text-xs">
+                Git remote (optional, not contacted yet)
+                <input
+                  bind:value={newStoreRemote}
+                  placeholder="git@github.com:you/passwords.git"
+                  class="input rounded-lg px-3 py-2 font-mono text-sm"
+                />
+              </label>
+              <p class="text-faint text-xs leading-relaxed">
+                The folder is created as a git repository whose first commit records the
+                recipient key, so the store can be cloned on another machine straight away.
+                A remote you enter is recorded, not contacted: the first sync is the push, and
+                nothing leaves this machine until you run it.
+              </p>
               <button
-                on:click={openStore}
-                disabled={openBusy}
-                class="btn-ghost w-fit rounded-lg px-3 py-1.5 text-sm"
+                on:click={createStore}
+                disabled={storeBusy || newStorePath === ''}
+                class="btn-accent w-fit rounded-lg px-3 py-2 text-sm"
               >
-                {openBusy ? 'Opening…' : 'Open an existing store folder…'}
+                {storeBusy ? 'Creating…' : 'Create store'}
               </button>
+
+              <h4 class="text-mute mt-2 text-xs font-semibold tracking-wide uppercase">… or open one that exists</h4>
+              <div>
+                <button
+                  on:click={openStore}
+                  disabled={openBusy}
+                  class="btn-ghost w-fit rounded-lg px-3 py-1.5 text-sm"
+                >
+                  {openBusy ? 'Opening…' : 'Open an existing store folder…'}
+                </button>
+              </div>
               {#if localStores.length > 0}
                 <div class="text-mute mt-1 text-xs">Found on this machine:</div>
                 <ul class="flex flex-col gap-1">
@@ -1726,7 +1944,8 @@
                   {/each}
                 </ul>
               {/if}
-              <div class="text-faint mt-1 text-xs">… or clone one over SSH:</div>
+
+              <h4 class="text-mute mt-2 text-xs font-semibold tracking-wide uppercase">… or clone one over SSH</h4>
               <input
                 bind:value={cloneUrl}
                 placeholder="git@github.com:you/passwords.git"
@@ -1737,54 +1956,68 @@
                   Host {clonePrep.host} · {clonePrep.known ? 'already trusted' : 'not yet trusted'} · fingerprint {clonePrep.fingerprint}
                 </p>
               {/if}
-              <button
-                on:click={doClone}
-                disabled={cloneBusy}
-                class="btn-accent rounded-lg px-3 py-2 text-sm"
-              >
-                {cloneBusy
-                  ? 'Working…'
-                  : clonePrep
-                    ? clonePrep.known
-                      ? 'Clone store'
-                      : 'Trust host & clone'
-                    : 'Probe host'}
-              </button>
-            {/if}
-          </section>
-        {:else if step === 1}
-          <section class="flex flex-col gap-2">
-            <p class="text-faint text-xs leading-relaxed">
-              Encrypted passwords are only readable with the matching OpenPGP secret key of
-              the store. You can skip this and import the key later from Setup — passwords
-              will stay locked until then.
-            </p>
+              <div>
+                <button
+                  on:click={doClone}
+                  disabled={cloneBusy}
+                  class="btn-accent rounded-lg px-3 py-2 text-sm"
+                >
+                  {cloneBusy
+                    ? 'Working…'
+                    : clonePrep
+                      ? clonePrep.known
+                        ? 'Clone store'
+                        : 'Trust host & clone'
+                      : 'Probe host'}
+                </button>
+              </div>
 
-            {#if sw.hasPgp}
-              <div class="flex items-center gap-2">
-                <span class="badge-success rounded-md px-2 py-1 text-xs">PGP key ready</span>
-                <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs">{sw.pgpKeyFingerprint}</span>
-              </div>
-            {:else}
-              <div class="flex items-center gap-2">
-                <button on:click={pickPgp} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose PGP key…</button>
-                <span class="text-faint min-w-0 flex-1 truncate text-xs">
-                  {pgpPicked || 'No OpenPGP key imported'}
-                </span>
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-faint text-xs">Passphrase (empty if your key has none)</span>
-                <div class="flex items-center gap-2">
-                  <input type="password" bind:value={pgpPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
-                  <button
-                    on:click={importPgp}
-                    disabled={importBusy || !pgpPicked}
-                    class="btn-accent rounded-lg px-3 py-2 text-sm"
-                  >
-                    {importBusy ? 'Importing…' : 'Import'}
-                  </button>
-                </div>
-              </div>
+              {#if !(sw.hasSsh && sshLoaded)}
+                <h4 class="text-mute mt-2 text-xs font-semibold tracking-wide uppercase">SSH key (for cloning)</h4>
+                <label class="text-faint flex flex-col gap-1 text-xs">
+                  Lock password (needed to seal or load the key)
+                  <input type="password" bind:value={lockPass} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+                </label>
+                {#if sw.hasSsh}
+                  <div class="flex items-center gap-2">
+                    <span class="badge-success rounded-md px-2 py-1 text-xs">SSH key stored</span>
+                    <span class="text-faint min-w-0 flex-1 truncate font-mono text-xs">{sw.sshKeyId}</span>
+                  </div>
+                  <div class="flex flex-col gap-1">
+                    <span class="text-faint text-xs">Passphrase to use the key (empty if your key has none)</span>
+                    <div class="flex items-center gap-2">
+                      <input type="password" bind:value={sshPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
+                      <button
+                        on:click={sshLoad}
+                        disabled={importBusy}
+                        class="btn-accent rounded-lg px-3 py-2 text-sm"
+                      >
+                        {importBusy ? 'Loading…' : 'Load key'}
+                      </button>
+                    </div>
+                  </div>
+                {:else}
+                  <div class="flex items-center gap-2">
+                    <button on:click={pickSsh} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose SSH key…</button>
+                    <span class="text-faint min-w-0 flex-1 truncate text-xs">
+                      {sshPicked || 'No SSH key imported'}
+                    </span>
+                  </div>
+                  <div class="flex flex-col gap-1">
+                    <span class="text-faint text-xs">Passphrase (empty if your key has none)</span>
+                    <div class="flex items-center gap-2">
+                      <input type="password" bind:value={sshPass} placeholder="••••••••" class="input min-w-0 flex-1 max-w-[420px] rounded-lg px-3 py-2 text-sm"/>
+                      <button
+                        on:click={importSsh}
+                        disabled={importBusy || !sshPicked}
+                        class="btn-accent rounded-lg px-3 py-2 text-sm"
+                      >
+                        {importBusy ? 'Importing…' : 'Import'}
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+              {/if}
             {/if}
           </section>
         {:else}
@@ -1896,6 +2129,40 @@
             {importBusy ? 'Importing…' : 'Import PGP key'}
           </button>
         </div>
+        {#if !sw.hasPgp}
+          <h4 class="text-mute mt-1 text-xs font-semibold tracking-wide uppercase">… or generate a new key</h4>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="text-faint flex flex-col gap-1 text-xs">
+              Name
+              <input bind:value={genName} placeholder="Jane Doe" class="input rounded-lg px-3 py-2 text-sm"/>
+            </label>
+            <label class="text-faint flex flex-col gap-1 text-xs">
+              Email
+              <input type="email" bind:value={genEmail} placeholder="jane@example.com" class="input rounded-lg px-3 py-2 text-sm"/>
+            </label>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="text-faint flex flex-col gap-1 text-xs">
+              Passphrase for the key
+              <input type="password" bind:value={genPass} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+            </label>
+            <label class="text-faint flex flex-col gap-1 text-xs">
+              Repeat passphrase
+              <input type="password" bind:value={genConfirm} placeholder="••••••••" class="input rounded-lg px-3 py-2 text-sm"/>
+            </label>
+          </div>
+          <p class="text-faint text-xs leading-relaxed">
+            A generated key is stored only in the app's sealed vault, so if the passphrase is
+            lost nothing on this machine can decrypt the store again.
+          </p>
+          <button
+            on:click={generateKey}
+            disabled={genBusy || genEmail.trim() === '' || genPass === ''}
+            class="btn-accent w-fit rounded-lg px-3 py-2 text-sm"
+          >
+            {genBusy ? 'Generating…' : 'Generate key'}
+          </button>
+        {/if}
         <div class="flex items-center gap-2 pt-1">
           <button on:click={pickSsh} class="btn-ghost rounded-lg px-3 py-1.5 text-sm">Choose SSH key…</button>
           <span class="text-faint min-w-0 flex-1 truncate text-xs">
@@ -1980,6 +2247,43 @@
                 ? 'Clone store'
                 : 'Trust host & clone'
               : 'Probe host'}
+        </button>
+      </section>
+
+      <section class="flex flex-col gap-2">
+        <h4 class="text-mute text-xs font-semibold tracking-wide uppercase">Create a new store</h4>
+        <p class="text-faint text-xs leading-relaxed">
+          A new store is a git repository encrypted to your OpenPGP key, and becomes the
+          active store. A remote you enter is recorded, not contacted: the first sync is the
+          push.
+        </p>
+        <label class="text-faint flex flex-col gap-1 text-xs">
+          Folder name
+          <input
+            bind:value={newStoreName}
+            on:blur={resolveNewStorePath}
+            on:keydown={(e) => { if (e.key === 'Enter') { void resolveNewStorePath() } }}
+            placeholder="passwords"
+            class="input rounded-lg px-3 py-2 font-mono text-sm"
+          />
+        </label>
+        {#if newStorePath !== ''}
+          <p class="text-faint font-mono text-xs break-all">Will be created at {newStorePath}</p>
+        {/if}
+        <label class="text-faint flex flex-col gap-1 text-xs">
+          Git remote (optional)
+          <input
+            bind:value={newStoreRemote}
+            placeholder="git@github.com:you/passwords.git"
+            class="input rounded-lg px-3 py-2 font-mono text-sm"
+          />
+        </label>
+        <button
+          on:click={createStore}
+          disabled={storeBusy || newStorePath === ''}
+          class="btn-accent w-fit rounded-lg px-3 py-2 text-sm"
+        >
+          {storeBusy ? 'Creating…' : 'Create store'}
         </button>
       </section>
 

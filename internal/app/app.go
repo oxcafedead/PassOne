@@ -1243,10 +1243,16 @@ func (a *App) Sync() (string, error) {
 	}
 	auth := a.sshAuth()
 
+	// A remote that holds no refs yet is the state a store created here is in
+	// before its first push: there is nothing to fetch or pull, and that is not
+	// a failure. Push still runs and creates the branch.
+	remoteEmpty := false
 	fetched := false
 	fetchErr := gitx.Fetch(root, auth)
 	if fetchErr != nil {
-		if !errors.Is(fetchErr, gitx.ErrUpToDate) {
+		if errors.Is(fetchErr, gitx.ErrRemoteEmpty) {
+			remoteEmpty = true
+		} else if !errors.Is(fetchErr, gitx.ErrUpToDate) {
 			return "", fetchErr
 		}
 	} else {
@@ -1254,13 +1260,18 @@ func (a *App) Sync() (string, error) {
 	}
 
 	pulled := false
-	pullErr := gitx.Pull(root, auth)
-	if pullErr != nil {
-		if !errors.Is(pullErr, gitx.ErrUpToDate) {
+	if !remoteEmpty {
+		pullErr := gitx.Pull(root, auth)
+		switch {
+		case pullErr == nil:
+			pulled = true
+		case errors.Is(pullErr, gitx.ErrUpToDate), errors.Is(pullErr, gitx.ErrRemoteEmpty):
+			// Nothing to merge. An empty remote here means it was emptied between
+			// the fetch and the pull, which is still "no incoming work": the push
+			// below is what re-establishes it.
+		default:
 			return "", pullErr
 		}
-	} else {
-		pulled = true
 	}
 
 	pushed := false
@@ -1326,6 +1337,11 @@ func (a *App) Status() (string, error) {
 		switch {
 		case state.IsDiverged:
 			fmt.Fprintln(&b, "Local and remote histories have diverged.")
+		case !state.HasRemoteBranch:
+			// A store created with a remote has commits that exist nowhere else
+			// yet, and no tracking ref to compare against, so the zero counts
+			// below would read as "in sync". They are not: nothing is backed up.
+			fmt.Fprintln(&b, "Nothing pushed to origin yet — run sync to publish the first commit.")
 		case state.Ahead == 0 && state.Behind == 0:
 			fmt.Fprintln(&b, "In sync with origin.")
 		default:

@@ -42,8 +42,20 @@ export function CreatePassword(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CreatePassword'](arg1, arg2, arg3, arg4);
 }
 
+export function CreateStore(arg1, arg2) {
+  return window['go']['main']['App']['CreateStore'](arg1, arg2);
+}
+
 export function CurrentSettings() {
   return window['go']['main']['App']['CurrentSettings']();
+}
+
+export function DefaultStoreDir(arg1) {
+  return window['go']['main']['App']['DefaultStoreDir'](arg1);
+}
+
+export function GeneratePGPKey(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['GeneratePGPKey'](arg1, arg2, arg3, arg4);
 }
 
 export function ImportPGPKeyFile(arg1, arg2, arg3) {
