@@ -1,4 +1,5 @@
 import {render, screen, waitFor, fireEvent, within} from '@testing-library/svelte'
+import {tick} from 'svelte'
 import {describe, expect, it} from 'vitest'
 import App from '../src/App.svelte'
 import {bridge} from './bridge'
@@ -14,6 +15,7 @@ const {
   CurrentSettings,
   DefaultStoreDir,
   GeneratePGPKey,
+  HasTOTP,
   IsUnlocked,
   ListPasswords,
   MovePassword,
@@ -22,6 +24,7 @@ const {
   ShowPassword,
   Unlock,
   UpdatePassword,
+  Username,
 } = bridge
 
 // One entry, already unlocked, already listed. Each test overrides only what it
@@ -51,6 +54,16 @@ async function selectEntry(entry = 'github/personal'): Promise<void> {
   await waitFor(() => screen.getByTitle(entry))
   await fireEvent.click(screen.getByTitle(entry))
   await screen.findByRole('heading', {level: 2, name: entry})
+}
+
+// Selecting an entry awaits a probe, but the heading it renders first appears
+// while that probe is still in flight, so an assertion about a button the probe
+// gates can pass or fail on timing alone. Wait for the probe to land and for the
+// DOM to be flushed, and only then read the button.
+async function probeSettled(): Promise<void> {
+  await waitFor(() => expect(HasTOTP).toHaveBeenCalled())
+  await waitFor(() => expect(Username).toHaveBeenCalled())
+  await tick()
 }
 
 // The lock screen's location list is one shared grid: every row contributes
@@ -400,6 +413,53 @@ describe('edit', () => {
 
     await waitFor(() => expect(screen.queryByRole('heading', {name: 'Edit entry'})).not.toBeInTheDocument())
     expect(UpdatePassword).not.toHaveBeenCalled()
+  })
+
+  // The TOTP and Username buttons are gated on a probe taken when the entry was
+  // selected, and the edit is what changes the answer. Both directions are
+  // covered because a stale probe fails each one differently: adding a seed
+  // leaves a button missing, removing one leaves a button that cannot work.
+  it('shows the TOTP button after an edit adds a seed', async () => {
+    vault()
+    // The entry carries no seed until the edit below gives it one.
+    HasTOTP.mockResolvedValueOnce(false).mockResolvedValue(true)
+    UpdatePassword.mockResolvedValue('Updated github/personal')
+    render(App)
+    await selectEntry()
+    await probeSettled()
+    expect(screen.queryByRole('button', {name: 'TOTP'})).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+    await screen.findByRole('heading', {name: 'Edit entry'})
+    await fireEvent.input(screen.getByPlaceholderText('Empty keeps current notes'), {
+      target: {value: 'otpauth://totp/example\nrecovery codes'},
+    })
+    await fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+
+    await waitFor(() => expect(UpdatePassword).toHaveBeenCalled())
+    expect(await screen.findByRole('button', {name: 'TOTP'})).toBeInTheDocument()
+  })
+
+  it('hides the TOTP button after an edit removes the seed', async () => {
+    vault()
+    // The entry carries a seed until the edit below strips it.
+    HasTOTP.mockResolvedValueOnce(true).mockResolvedValue(false)
+    UpdatePassword.mockResolvedValue('Updated github/personal')
+    render(App)
+    await selectEntry()
+    expect(await screen.findByRole('button', {name: 'TOTP'})).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+    await screen.findByRole('heading', {name: 'Edit entry'})
+    await fireEvent.input(screen.getByPlaceholderText('Empty keeps current notes'), {
+      target: {value: 'recovery codes'},
+    })
+    await fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+
+    await waitFor(() => expect(UpdatePassword).toHaveBeenCalled())
+    await waitFor(() => expect(HasTOTP).toHaveBeenCalledTimes(2))
+    await probeSettled()
+    expect(screen.queryByRole('button', {name: 'TOTP'})).not.toBeInTheDocument()
   })
 })
 

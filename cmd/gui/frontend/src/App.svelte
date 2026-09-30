@@ -1325,6 +1325,12 @@
         revealed = false
         flash(msg)
         await refresh()
+        // The edit may have added or removed an otpauth line or a login, and
+        // both actions are gated on a probe that ran before the edit. Without
+        // this the TOTP and Username buttons keep whatever the entry carried
+        // when it was selected, so adding a seed shows no button and removing
+        // one leaves a button whose copy call then fails.
+        await probeSelected()
       }
     } catch (e) {
       edError = String(e)
