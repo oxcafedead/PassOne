@@ -48,6 +48,8 @@ export function LoadSSHKey(arg1:string):Promise<void>;
 
 export function Lock():Promise<void>;
 
+export function MovePassword(arg1:string,arg2:string):Promise<string>;
+
 export function OpenLocalStore(arg1:string):Promise<void>;
 
 export function PickPrivateKey(arg1:string):Promise<ui.Picked>;

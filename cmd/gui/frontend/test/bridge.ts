@@ -33,6 +33,7 @@ const defaults = {
   ClipboardHistoryEnabled: async () => false,
   CreatePassword: async () => 'Created',
   UpdatePassword: async () => 'Updated',
+  MovePassword: async () => 'Moved',
   RemovePassword: async () => 'Removed',
   RevealPath: async () => undefined,
   PickPrivateKey: async () => ({path: '', canceled: true, password: ''}),

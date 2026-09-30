@@ -191,6 +191,69 @@ func (s *Store) Remove(p string) error {
 	return nil
 }
 
+// Move renames the encrypted .gpg file for password from to to, creating any
+// missing parent directory of the new path. The ciphertext is moved as-is: a
+// rename never decrypts and never re-encrypts, so it cannot alter a secret or
+// depend on the recipients still being resolvable. Moving onto an existing
+// password is refused rather than overwriting it, and a missing source is
+// reported like Remove reports one.
+func (s *Store) Move(from, to string) error {
+	srcFull, err := s.relSafe(from)
+	if err != nil {
+		return err
+	}
+	dstFull, err := s.relSafe(to)
+	if err != nil {
+		return err
+	}
+	if srcFull == dstFull {
+		return fmt.Errorf("password is already named %s", to)
+	}
+	src := srcFull + ".gpg"
+	dst := dstFull + ".gpg"
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("password not found: %s", from)
+		}
+		return err
+	}
+	// A case-only rename names the same file on a case-insensitive filesystem,
+	// so it has to skip the "already there" refusal below and take the
+	// two-step path in renameCase.
+	caseOnly := strings.EqualFold(srcFull, dstFull)
+	if !caseOnly {
+		if _, err := os.Stat(dst); err == nil {
+			return fmt.Errorf("password already exists: %s", to)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	if caseOnly {
+		return renameCase(src, dst)
+	}
+	return config.MoveFile(src, dst)
+}
+
+// renameCase renames src to dst when the two differ only in case. Windows
+// resolves such a pair to one file, and whether a single replace-existing
+// rename settles the new casing depends on the filesystem, so the file is
+// parked under a scratch name first. A failure of the second step puts it back
+// rather than leaving the entry with no file at all.
+func renameCase(src, dst string) error {
+	scratch := src + ".renaming"
+	if err := config.MoveFile(src, scratch); err != nil {
+		return err
+	}
+	if err := config.MoveFile(scratch, dst); err != nil {
+		_ = config.MoveFile(scratch, src)
+		return err
+	}
+	return nil
+}
+
 // Delete removes a password file. It returns os.ErrNotExist behavior wrapped
 // for the caller to distinguish.
 func (s *Store) Delete(p string) error {

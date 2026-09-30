@@ -16,6 +16,7 @@
     ClipboardHistoryEnabled,
     CreatePassword,
     UpdatePassword,
+    MovePassword,
     RemovePassword,
     RevealPath,
     PickPrivateKey,
@@ -154,6 +155,15 @@
   let edBody: string = ''
   let edBusy: boolean = false
   let edError: string = ''
+  // Rename/move dialog. `moving` holds the entry being moved, so the dialog
+  // cannot drift from the selection it was opened for, and `mvTarget` starts
+  // at the current path so the common case is an edit to the last segment
+  // rather than a retype. The backend renames the stored file, so the entry is
+  // never re-encrypted and the content cannot change here.
+  let moving: string | null = null
+  let mvTarget: string = ''
+  let mvBusy: boolean = false
+  let mvError: string = ''
   let armDelete: boolean = false
   let status: string = ''
   let statusError: boolean = false
@@ -336,6 +346,25 @@
     }
     expanded = s
     rows = buildRows(tree, expanded)
+  }
+
+  // expandAncestors opens every folder on the way to an entry, so a row is
+  // never invisible while it is the selected one. A move needs this: it can
+  // drop an entry into a folder that did not exist a moment ago, and the tree
+  // would otherwise render that folder collapsed with the just-renamed entry
+  // hidden inside it. refresh() rebuilds the rows from `expanded`, so the
+  // folders have to be added before it runs.
+  function expandAncestors(p: string): void {
+    const parts = p.split('/')
+    parts.pop() // the entry itself is a leaf, not a folder to open
+    if (parts.length === 0) {
+      return
+    }
+    const s = new Set(expanded)
+    for (let i = 1; i <= parts.length; i++) {
+      s.add(parts.slice(0, i).join('/'))
+    }
+    expanded = s
   }
 
   // The lock screen's environment block comes from exactly one call. Settings
@@ -642,6 +671,9 @@
     armDelete = false
     editing = null
     edError = ''
+    moving = null
+    mvTarget = ''
+    mvError = ''
     status = ''
     stopCountdown()
     stopTOTPCountdown()
@@ -1205,6 +1237,56 @@
     }
   }
 
+  function openMove(): void {
+    if (!selected) {
+      return
+    }
+    error = ''
+    armDelete = false
+    mvTarget = selected
+    mvError = ''
+    moving = selected
+  }
+
+  function closeMove(): void {
+    moving = null
+    mvError = ''
+  }
+
+  async function submitMove(): Promise<void> {
+    const from = moving
+    if (!from) {
+      return
+    }
+    const to = mvTarget.trim()
+    if (to === '') {
+      mvError = 'Enter a new password path'
+      flash(mvError, true)
+      return
+    }
+    mvBusy = true
+    mvError = ''
+    try {
+      const msg = await MovePassword(from, to)
+      closeMove()
+      // The name is the entry's identity, so the selection has to follow it,
+      // and the decrypted detail belonged to the old path: it is dropped
+      // without being shown again, exactly as an edit does.
+      selected = to
+      detail = ''
+      revealed = false
+      flash(msg)
+      expandAncestors(to)
+      await refresh()
+      await probeSelected()
+    } catch (e) {
+      mvError = String(e)
+      flash(mvError, true)
+    } finally {
+      mvBusy = false
+    }
+  }
+
   async function submitEdit(): Promise<void> {
     if (!editing) {
       return
@@ -1615,6 +1697,17 @@
             Edit
           </button>
           <button
+            data-testid="move"
+            on:click={openMove}
+            title="Rename this entry, or move it into another folder by changing its path"
+            class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1zm8-8a1 1 0 00-1-1h-6a1 1 0 00-1 1v10a1 1 0 001 1h6a1 1 0 001-1V8z"/>
+            </svg>
+            Move
+          </button>
+          <button
             on:click={toggleDeleteArm}
             title="Delete this entry (asks twice)"
             class={'btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ' + (armDelete ? 'text-danger' : '')}
@@ -1739,6 +1832,47 @@
               : editing.mode === 'add'
                 ? 'Create'
                 : 'Save'}
+          </button>
+        </div>
+      </form>
+    </div>
+  {/if}
+
+  {#if moving}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+      <form class="panel ring-panel flex w-full max-w-md flex-col gap-3 rounded-xl p-4" on:submit|preventDefault={submitMove}>
+        <h3 class="text-main text-sm font-semibold">Move entry</h3>
+        <p class="text-faint text-xs break-words">
+          Moving <span class="text-sub font-mono">{moving}</span>
+        </p>
+        <label class="text-faint flex flex-col gap-1 text-xs">
+          New path
+          <input
+            data-testid="move-target"
+            bind:value={mvTarget}
+            autofocus
+            spellcheck="false"
+            placeholder="folder/example.com"
+            class="input rounded-lg px-3 py-2 font-mono text-sm"
+          />
+        </label>
+        <p class="text-faint text-xs">
+          The stored file is renamed as it is, so nothing is decrypted or re-encrypted. Add a folder to the
+          path to move the entry into it.
+        </p>
+        {#if mvError}
+          <p class="text-danger text-xs break-words">{mvError}</p>
+        {/if}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            on:click={closeMove}
+            class="btn-ghost rounded-lg px-3 py-2 text-sm"
+          >
+            Cancel
+          </button>
+          <button type="submit" disabled={mvBusy} class="btn-accent rounded-lg px-3 py-2 text-sm font-medium">
+            {mvBusy ? 'Moving…' : 'Move'}
           </button>
         </div>
       </form>

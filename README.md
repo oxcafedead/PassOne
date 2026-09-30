@@ -24,6 +24,7 @@ Unlike most clients, it does **not** need `gpg.exe`, `git.exe`, or `ssh.exe` ins
 - 🆕 **Create your own store** — from nothing to a working vault in two steps: generate a key, then create a pass store (optionally with a git remote) without a separate `pass init`.
 - 🗝️ **SSH built-in** — import OpenSSH private keys (`ed25519`, RSA), verify host keys, manage `known_hosts`, and sync over SSH via [`go-git`](https://github.com/go-git/go-git).
 - 📂 **Pass-compatible** — reads and writes standard pass stores: `.gpg-id`, folders, and `*.gpg` files.
+- 📦 **Move and rename entries** — a **Move** button in the GUI (and `mv <from> <to>` in the CLI) renames an entry or moves it into another folder. The stored file is renamed, never re-encrypted, so a move cannot alter a secret; a move onto an existing entry is refused rather than replacing it.
 - 🔄 **Git sync** — `clone`, `status`, and `sync` (fetch/pull/push) without an external git installation.
 - 🔒 **Security-first** — keys are sealed with Windows DPAPI; decrypted key material lives in memory only during an unlocked session; idle auto-lock; best-effort memory zeroing.
 - 📋 **Clipboard auto-clear** — copied passwords are removed from the clipboard after a configurable timeout, and are marked so Windows keeps them out of Clipboard History and the cloud clipboard.
@@ -147,6 +148,7 @@ Passwords
   copy <path>                  Copy the password to the clipboard (auto-clears)
   save <path> <file>           Save encrypted plaintext from a file ('-' = stdin)
   edit <path> [--no-commit]    Edit, re-encrypt atomically, then commit
+  mv   <from> <to>             Rename or move a password entry
   rm   <path>                  Remove a password entry
 
 Git

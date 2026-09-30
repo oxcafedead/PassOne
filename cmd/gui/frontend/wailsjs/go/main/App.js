@@ -94,6 +94,10 @@ export function Lock() {
   return window['go']['main']['App']['Lock']();
 }
 
+export function MovePassword(arg1,arg2) {
+  return window['go']['main']['App']['MovePassword'](arg1, arg2);
+}
+
 export function OpenLocalStore(arg1) {
   return window['go']['main']['App']['OpenLocalStore'](arg1);
 }

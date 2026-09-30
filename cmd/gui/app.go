@@ -101,6 +101,12 @@ func (a *App) UpdatePassword(name, password, body string, keepPassword bool) (st
 // RemovePassword deletes a password entry.
 func (a *App) RemovePassword(name string) error { return a.gui.RemovePassword(name) }
 
+// MovePassword renames a password entry or moves it into another folder. The
+// stored file is renamed, so the entry is never re-encrypted.
+func (a *App) MovePassword(from, to string) (string, error) {
+	return a.gui.MovePassword(from, to)
+}
+
 // PickPrivateKey opens a file dialog for a private key file.
 func (a *App) PickPrivateKey(title string) (ui.Picked, error) { return a.gui.PickPrivateKey(title) }
 

@@ -179,6 +179,9 @@ func TestAppPassThroughMethods(t *testing.T) {
 	if err := a.RemovePassword("x"); err == nil {
 		t.Fatal("expected RemovePassword without store to fail")
 	}
+	if _, err := a.MovePassword("x", "y"); err == nil {
+		t.Fatal("expected MovePassword without store to fail")
+	}
 	if _, err := a.PickPrivateKey(""); err == nil {
 		t.Fatal("expected PickPrivateKey without context to fail")
 	}

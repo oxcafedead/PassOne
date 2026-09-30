@@ -65,6 +65,7 @@ func commands() map[string]func(*env, []string) error {
 		"copy-username": cmdCopyUsername,
 		"save":          cmdSave,
 		"edit":          cmdEdit,
+		"mv":            cmdMove,
 		"rm":            cmdRemove,
 
 		"status": cmdStatus,
@@ -515,6 +516,24 @@ func cmdEdit(e *env, args []string) error {
 		}
 	}
 	e.printf("Saved %s.\n", name)
+	return nil
+}
+
+// cmdMove renames an entry, or moves it into a folder by naming a longer path.
+// The stored file is renamed, so this never decrypts and never re-encrypts the
+// entry: the secret cannot be exposed or altered on the way to its new path.
+func cmdMove(e *env, args []string) error {
+	pos := positional(args)
+	if len(pos) < 2 {
+		return fmt.Errorf("mv requires <from> <to>")
+	}
+	if err := ensureUnlocked(e); err != nil {
+		return err
+	}
+	if err := e.app.MovePassword(pos[0], pos[1]); err != nil {
+		return err
+	}
+	e.printf("Moved %s to %s.\n", pos[0], pos[1])
 	return nil
 }
 

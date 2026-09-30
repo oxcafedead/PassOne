@@ -455,6 +455,73 @@ func TestCmdRemove(t *testing.T) {
 	})
 }
 
+func TestCmdMove(t *testing.T) {
+	t.Run("missing paths", func(t *testing.T) {
+		e := newTestEnv(t)
+		if err := cmdMove(e, nil); err == nil {
+			t.Fatal("expected error")
+		}
+		if err := cmdMove(e, []string{"site"}); err == nil {
+			t.Fatal("expected error with only one path")
+		}
+	})
+
+	t.Run("locked", func(t *testing.T) {
+		e := newTestEnv(t)
+		_ = setupStore(t, e)
+		if err := cmdMove(e, []string{"site", "work/site"}); err == nil {
+			t.Fatal("expected error when locked")
+		}
+	})
+
+	t.Run("moves password", func(t *testing.T) {
+		e := newTestEnv(t)
+		_ = setupStore(t, e)
+		unlockPGP(t, e)
+		if err := e.app.SavePassword("site", []byte("secret\nnotes\n")); err != nil {
+			t.Fatalf("SavePassword: %v", err)
+		}
+		if err := cmdMove(e, []string{"site", "work/site"}); err != nil {
+			t.Fatalf("cmdMove: %v", err)
+		}
+		out := readOut(t, e.stdout)
+		if !strings.Contains(out, "Moved site to work/site") {
+			t.Fatalf("output = %q", out)
+		}
+		// The entry moved with its content intact.
+		plain, err := e.app.ShowPassword("work/site")
+		if err != nil {
+			t.Fatalf("ShowPassword: %v", err)
+		}
+		if string(plain) != "secret\nnotes\n" {
+			t.Fatalf("moved entry = %q", plain)
+		}
+		if _, err := e.app.ShowPassword("site"); err == nil {
+			t.Fatal("expected the old path to be gone")
+		}
+	})
+
+	t.Run("refuses an occupied target", func(t *testing.T) {
+		e := newTestEnv(t)
+		_ = setupStore(t, e)
+		unlockPGP(t, e)
+		for _, n := range []string{"a", "b"} {
+			if err := e.app.SavePassword(n, []byte("secret-"+n)); err != nil {
+				t.Fatalf("SavePassword: %v", err)
+			}
+		}
+		if err := cmdMove(e, []string{"a", "b"}); err == nil {
+			t.Fatal("expected a move onto an existing password to fail")
+		}
+		// Both entries survive the refusal.
+		for _, n := range []string{"a", "b"} {
+			if _, err := e.app.ShowPassword(n); err != nil {
+				t.Fatalf("%s was lost: %v", n, err)
+			}
+		}
+	})
+}
+
 func TestCmdStatus(t *testing.T) {
 	t.Run("no store open", func(t *testing.T) {
 		e := newTestEnv(t)

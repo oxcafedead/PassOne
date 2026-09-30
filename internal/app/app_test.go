@@ -844,6 +844,186 @@ func TestAutoCommitOnSaveAndRemove(t *testing.T) {
 	}
 }
 
+// moveTestApp returns an unlocked app over a git-backed store holding one
+// entry, "work/jira" with the given plaintext. The store is a repository
+// because a move has to stage two paths, and that is only observable in git.
+func moveTestApp(t *testing.T, plaintext string) (*App, string) {
+	t.Helper()
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armored))
+	if err != nil {
+		t.Fatalf("ReadArmoredKeyRing: %v", err)
+	}
+	fp := entityFingerprint(el[0])
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if _, err := store.Create(storeDir, []string{fp}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	if _, err := goGit.PlainInit(storeDir, false); err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	if err := gitx.Add(storeDir, ".gpg-id"); err != nil {
+		t.Fatalf("gitx.Add: %v", err)
+	}
+	if _, err := gitx.Commit(storeDir, "init store", "Tester", "t@example.com"); err != nil {
+		t.Fatalf("gitx.Commit: %v", err)
+	}
+	if err := a.OpenLocalStore(storeDir); err != nil {
+		t.Fatalf("OpenLocalStore: %v", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := a.SetPassword("work/jira", []byte(plaintext), false); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	return a, storeDir
+}
+
+func TestMovePassword(t *testing.T) {
+	a, _ := moveTestApp(t, "pass1\nnote\n")
+
+	if err := a.MovePassword("work/jira", "work/jira-renamed"); err != nil {
+		t.Fatalf("MovePassword: %v", err)
+	}
+	// The entry keeps its exact content: a move renames the stored file and
+	// never re-encrypts, so there is no window in which a secret is exposed
+	// or altered.
+	plain, err := a.ShowPassword("work/jira-renamed")
+	if err != nil {
+		t.Fatalf("ShowPassword after move: %v", err)
+	}
+	if string(plain) != "pass1\nnote\n" {
+		t.Fatalf("moved entry = %q", plain)
+	}
+	if _, err := a.ShowPassword("work/jira"); err == nil {
+		t.Fatal("expected the old path to be gone after a move")
+	}
+	listed, err := a.ListPasswords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0] != "work/jira-renamed" {
+		t.Fatalf("ListPasswords = %v, want [work/jira-renamed]", listed)
+	}
+}
+
+func TestMovePasswordIntoNewFolder(t *testing.T) {
+	a, storeDir := moveTestApp(t, "pass1\n")
+	if err := a.MovePassword("work/jira", "archive/2026/jira"); err != nil {
+		t.Fatalf("MovePassword: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(storeDir, "archive", "2026", "jira.gpg")); err != nil {
+		t.Fatalf("expected the entry under its new folders: %v", err)
+	}
+	// A move in a git store is a rename in the history, not an add plus a
+	// delete: both halves have to land in one commit or the next commit on
+	// this repository would silently pick up the missing half.
+	status, err := gitx.Status(storeDir)
+	if err != nil {
+		t.Fatalf("gitx.Status: %v", err)
+	}
+	if strings.TrimSpace(status) != "" {
+		t.Fatalf("expected a clean tree after a move, got:\n%s", status)
+	}
+	repo, err := goGit.PlainOpen(storeDir)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("CommitObject: %v", err)
+	}
+	if commit.Message != "Move work/jira to archive/2026/jira" {
+		t.Fatalf("commit message = %q", commit.Message)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if _, err := tree.File("archive/2026/jira.gpg"); err != nil {
+		t.Fatalf("the new path is not in the commit: %v", err)
+	}
+	if _, err := tree.File("work/jira.gpg"); err == nil {
+		t.Fatal("the old path is still in the commit: a move committed only one half")
+	}
+}
+
+func TestMovePasswordRefuses(t *testing.T) {
+	a, _ := moveTestApp(t, "pass1\n")
+	if err := a.SetPassword("work/other", []byte("pass2\n"), false); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		from, to string
+	}{
+		{"empty source", "", "work/new"},
+		{"empty target", "work/jira", ""},
+		{"blank source", "   ", "work/new"},
+		{"missing source", "work/missing", "work/new"},
+		{"target exists", "work/jira", "work/other"},
+		{"same name", "work/jira", "work/jira"},
+		{"source escapes the store", "../evil", "work/new"},
+		{"target escapes the store", "work/jira", "../evil"},
+	}
+	for _, tc := range cases {
+		if err := a.MovePassword(tc.from, tc.to); err == nil {
+			t.Errorf("%s: expected MovePassword(%q, %q) to fail", tc.name, tc.from, tc.to)
+		}
+	}
+	// Nothing above may have moved or destroyed anything.
+	for _, p := range []string{"work/jira", "work/other"} {
+		exists, err := a.PasswordExists(p)
+		if err != nil {
+			t.Fatalf("PasswordExists(%q): %v", p, err)
+		}
+		if !exists {
+			t.Errorf("%s: a refused move changed the store", p)
+		}
+	}
+	plain, err := a.ShowPassword("work/other")
+	if err != nil {
+		t.Fatalf("ShowPassword: %v", err)
+	}
+	if string(plain) != "pass2\n" {
+		t.Fatalf("a refused move overwrote an entry: %q", plain)
+	}
+}
+
+func TestMovePasswordRequiresUnlock(t *testing.T) {
+	a, _ := moveTestApp(t, "pass1\n")
+	a.Lock()
+	if err := a.MovePassword("work/jira", "work/new"); !errors.Is(err, ErrLocked) {
+		t.Fatalf("MovePassword while locked = %v, want ErrLocked", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := a.MovePassword("work/jira", "work/new"); err != nil {
+		t.Fatalf("MovePassword: %v", err)
+	}
+}
+
+func TestMovePasswordWithoutStore(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if err := a.MovePassword("a", "b"); err == nil {
+		t.Fatal("expected MovePassword without a store to fail")
+	}
+}
+
 func sshTestKey(t *testing.T) []byte {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)

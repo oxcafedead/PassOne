@@ -419,6 +419,81 @@ func TestUpdatePasswordHappyPath(t *testing.T) {
 	}
 }
 
+func TestMovePasswordHappyPath(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	if _, err := g.CreatePassword("site.com", "secret", "secret", "user: alice"); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	if _, err := g.CreatePassword("other.com", "other", "other", ""); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+
+	msg, err := g.MovePassword(" site.com ", "work/site.com ")
+	if err != nil {
+		t.Fatalf("MovePassword: %v", err)
+	}
+	if !strings.Contains(msg, "site.com") || !strings.Contains(msg, "work/site.com") {
+		t.Fatalf("message = %q", msg)
+	}
+	// The entry kept its content: a move renames the stored file, so the
+	// secret is never decrypted on the way and cannot have changed.
+	plain, err := g.ShowPassword("work/site.com")
+	if err != nil {
+		t.Fatalf("ShowPassword: %v", err)
+	}
+	if plain != "secret\nuser: alice" {
+		t.Fatalf("moved entry = %q", plain)
+	}
+	listed, err := g.ListPasswords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 2 || listed[0] != "other.com" || listed[1] != "work/site.com" {
+		t.Fatalf("ListPasswords = %v", listed)
+	}
+}
+
+func TestMovePasswordValidation(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	if _, err := g.CreatePassword("site.com", "secret", "secret", ""); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	if _, err := g.CreatePassword("taken.com", "secret", "secret", ""); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		from, to string
+	}{
+		{"empty source", "", "work/site.com"},
+		{"empty target", "site.com", ""},
+		{"blank target", "site.com", "   "},
+		{"trailing slash", "site.com", "work/"},
+		{"missing source", "missing.com", "work/site.com"},
+		{"target exists", "site.com", "taken.com"},
+		{"same name", "site.com", "site.com"},
+	}
+	for _, tc := range cases {
+		if _, err := g.MovePassword(tc.from, tc.to); err == nil {
+			t.Errorf("%s: expected MovePassword(%q, %q) to fail", tc.name, tc.from, tc.to)
+		}
+	}
+	// A case-only rename is a real request on a case-insensitive filesystem,
+	// not a no-op, so it has to go through rather than be refused as "target
+	// exists" or "same name".
+	if _, err := g.MovePassword("site.com", "Site.com"); err != nil {
+		t.Fatalf("MovePassword (case only): %v", err)
+	}
+	if exists, err := g.core.PasswordExists("Site.com"); err != nil || !exists {
+		t.Fatalf("PasswordExists(Site.com) = %v, %v", exists, err)
+	}
+	// A refused move leaves the vault exactly as it was.
+	if _, err := g.ShowPassword("taken.com"); err != nil {
+		t.Fatalf("a refused move destroyed an entry: %v", err)
+	}
+}
+
 func TestRemovePassword(t *testing.T) {
 	g, _ := setupUnlockedStore(t)
 	if _, err := g.CreatePassword("site.com", "secret", "secret", ""); err != nil {

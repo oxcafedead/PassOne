@@ -209,6 +209,202 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+func TestMove(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.WriteEncrypted("github/personal", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+
+	// A move into a folder that does not exist yet has to create it, and the
+	// ciphertext has to arrive byte for byte: a move never re-encrypts, so
+	// anything else would mean the secret was decrypted on the way.
+	if err := st.Move("github/personal", "work/archive/github"); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	moved, err := st.Read("work/archive/github")
+	if err != nil {
+		t.Fatalf("Read after Move: %v", err)
+	}
+	if string(moved) != "CIPHER" {
+		t.Fatalf("Move altered the ciphertext: %q", moved)
+	}
+	if _, err := st.Read("github/personal"); !os.IsNotExist(err) {
+		t.Fatalf("expected the old path to be gone, got %v", err)
+	}
+	// The empty source folder is harmless, but it must not appear in the
+	// listing: a directory with no entries is not a password.
+	listed, err := st.ListPasswords()
+	if err != nil {
+		t.Fatalf("ListPasswords: %v", err)
+	}
+	if len(listed) != 1 || listed[0] != "work/archive/github" {
+		t.Fatalf("ListPasswords = %v, want [work/archive/github]", listed)
+	}
+}
+
+func TestMoveRenamesInPlace(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.WriteEncrypted("github/personal", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	if err := st.Move("github/personal", "github/work"); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if _, err := st.Read("github/work"); err != nil {
+		t.Fatalf("Read after Move: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "github", "personal.gpg")); !os.IsNotExist(err) {
+		t.Fatal("expected the old file to be gone after a rename in place")
+	}
+}
+
+func TestMoveRefuses(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for _, p := range []string{"github/personal", "github/work"} {
+		if err := st.WriteEncrypted(p, []byte("CIPHER-"+p)); err != nil {
+			t.Fatalf("WriteEncrypted %q: %v", p, err)
+		}
+	}
+
+	// Moving onto a live entry would destroy it, so it is refused and both
+	// files keep their own contents.
+	if err := st.Move("github/personal", "github/work"); err == nil {
+		t.Fatal("expected a move onto an existing password to be refused")
+	}
+	for _, p := range []string{"github/personal", "github/work"} {
+		data, err := st.Read(p)
+		if err != nil {
+			t.Fatalf("Read %q: %v", p, err)
+		}
+		if string(data) != "CIPHER-"+p {
+			t.Fatalf("%q was overwritten by a refused move: %q", p, data)
+		}
+	}
+
+	if err := st.Move("github/missing", "github/new"); err == nil {
+		t.Fatal("expected a move of a missing password to fail")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "github", "new.gpg")); !os.IsNotExist(err) {
+		t.Fatal("a failed move created the destination file")
+	}
+
+	if err := st.Move("github/personal", "github/personal"); err == nil {
+		t.Fatal("expected a move onto itself to be refused")
+	}
+	// Backslash shorthand and . segments normalize the same way they do on a
+	// read, so "a" and "a/" and "x\..\a" are all the same entry.
+	if err := st.Move("x\\..\\github/personal", "github/./personal/../personal"); err == nil {
+		t.Fatal("expected a normalized move onto itself to be refused")
+	}
+	for _, bad := range []struct{ from, to string }{
+		{"../evil", "github/personal"},
+		{"github/personal", "../evil"},
+		{"github/personal", "/abs/path"},
+	} {
+		if err := st.Move(bad.from, bad.to); err == nil {
+			t.Fatalf("expected move %q -> %q to be rejected", bad.from, bad.to)
+		}
+	}
+	evil := filepath.Join(filepath.Dir(dir), "evil.gpg")
+	if _, err := os.Stat(evil); !os.IsNotExist(err) {
+		t.Fatal("a move escaped the store root")
+	}
+}
+
+func TestMoveCaseOnly(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.WriteEncrypted("github/personal", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	// On a case-insensitive filesystem the two names are one file, so this
+	// rename has to go through a scratch name rather than be refused as a
+	// move onto an existing password.
+	if err := st.Move("github/personal", "GitHub/Personal"); err != nil {
+		t.Fatalf("Move (case only): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "GitHub", "Personal.gpg")); err != nil {
+		t.Fatalf("expected the renamed casing on disk: %v", err)
+	}
+	// The scratch name must not be left behind: ListPasswords only reports
+	// *.gpg files, so a leftover would sit in the store until the next move.
+	entries, err := os.ReadDir(filepath.Join(dir, "github"))
+	if err == nil {
+		for _, e := range entries {
+			if strings.Contains(e.Name(), "renaming") {
+				t.Fatalf("Move left its scratch file behind: %s", e.Name())
+			}
+		}
+	}
+}
+
+func TestMoveMkdirAllError(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.WriteEncrypted("a", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	// "a" is a file, so it cannot also be the folder a move into "a/b" needs.
+	if err := os.WriteFile(filepath.Join(dir, "blocker"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Move("a", "blocker/b"); err == nil {
+		t.Fatal("expected MkdirAll error when the new parent is a file")
+	}
+	if _, err := st.Read("a"); err != nil {
+		t.Fatalf("a failed move lost the source entry: %v", err)
+	}
+}
+
+func TestMoveCaseOnlyFailureLeavesTheEntry(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.WriteEncrypted("github/personal", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	// The scratch name a case-only rename parks the file under is already
+	// taken by a non-empty directory, so the first step cannot move onto it.
+	scratch := filepath.Join(dir, "github", "personal.gpg.renaming")
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scratch, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Move("github/personal", "GitHub/Personal"); err == nil {
+		t.Fatal("expected a case-only rename onto an occupied scratch name to fail")
+	}
+	// A failed rename must not leave the entry with no file at all.
+	data, err := st.Read("github/personal")
+	if err != nil {
+		t.Fatalf("a failed case-only rename lost the entry: %v", err)
+	}
+	if string(data) != "CIPHER" {
+		t.Fatalf("a failed case-only rename altered the entry: %q", data)
+	}
+}
+
 func TestStoreRoot(t *testing.T) {
 	dir := t.TempDir()
 	st, err := Create(dir, []string{"AA"})

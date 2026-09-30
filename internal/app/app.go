@@ -1038,6 +1038,47 @@ func (a *App) RemovePassword(name string) error {
 	return nil
 }
 
+// MovePassword renames an entry, or moves it into another folder by naming a
+// longer path. The encrypted file is renamed as-is, so this never sees
+// plaintext: the recipients are not re-resolved and the secret is not
+// re-encrypted, which is why a move cannot corrupt an entry the way a
+// save-and-delete would if the key could no longer read it. It still requires
+// an unlocked session, because it takes a path out of the vault.
+func (a *App) MovePassword(from, to string) error {
+	if err := a.requireUnlocked(); err != nil {
+		return err
+	}
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || to == "" {
+		return errors.New("move requires the current and the new password path")
+	}
+	st := a.storePath()
+	if st == nil {
+		return errors.New("no password store is open; use 'open' or 'clone' first")
+	}
+	if err := st.Move(from, to); err != nil {
+		return err
+	}
+	a.autoCommitMove(from, to)
+	return nil
+}
+
+// autoCommitMove stages a rename as the pair of changes it actually is: the
+// old path leaves the index and the new one enters it. Reusing autoCommit
+// would stage one side only, leaving the other half of the rename for whatever
+// commit ran next — which is how a moved entry can come back on the next pull.
+func (a *App) autoCommitMove(from, to string) {
+	st := a.storePath()
+	if st == nil || !isGitRepo(st.Root()) {
+		return
+	}
+	_ = gitx.Remove(st.Root(), from+".gpg")
+	_ = gitx.Add(st.Root(), to+".gpg")
+	author, email := a.gitAuthor()
+	_, _ = gitx.Commit(st.Root(), "Move "+from+" to "+to, author, email)
+}
+
 func (a *App) storePath() *store.Store {
 	a.mu.Lock()
 	defer a.mu.Unlock()

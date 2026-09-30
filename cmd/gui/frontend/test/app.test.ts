@@ -1,4 +1,4 @@
-import {render, screen, waitFor, fireEvent} from '@testing-library/svelte'
+import {render, screen, waitFor, fireEvent, within} from '@testing-library/svelte'
 import {describe, expect, it} from 'vitest'
 import App from '../src/App.svelte'
 import {bridge} from './bridge'
@@ -16,6 +16,7 @@ const {
   GeneratePGPKey,
   IsUnlocked,
   ListPasswords,
+  MovePassword,
   RemovePassword,
   RevealPath,
   ShowPassword,
@@ -482,6 +483,120 @@ describe('delete', () => {
     // and the model clamps the offset away.
     expect(scroller.querySelectorAll('li').length).toBeGreaterThan(0)
     expect(scroller.scrollTop).toBe(6 * ROW_PX)
+  })
+})
+
+// The header button and the dialog's submit button are both named "Move", so
+// everything inside the dialog is looked up inside it. The dialog's root is the
+// form the heading sits in.
+async function openMoveDialog(): Promise<HTMLElement> {
+  await fireEvent.click(screen.getByTestId('move'))
+  const heading = await screen.findByRole('heading', {name: 'Move entry'})
+  const form = heading.closest('form')
+  if (!form) {
+    throw new Error('the move dialog is not a form')
+  }
+  return form as HTMLElement
+}
+
+describe('move', () => {
+  // The dialog opens with the current path already filled in, so the common case
+  // is editing the last segment rather than retyping the whole path.
+  it('sends the old and the new path, then follows the rename', async () => {
+    vault('github/personal')
+    render(App)
+    await selectEntry()
+    const dialog = await openMoveDialog()
+
+    const target = within(dialog).getByTestId('move-target')
+    expect((target as HTMLInputElement).value).toBe('github/personal')
+    await fireEvent.input(target, {target: {value: 'github/work'}})
+    await fireEvent.click(within(dialog).getByRole('button', {name: 'Move'}))
+
+    // The old and the new name both go over the bridge, in that order: the
+    // entry is identified by the name it is leaving.
+    await waitFor(() => expect(MovePassword).toHaveBeenCalledWith('github/personal', 'github/work'))
+    // The rename is followed by a fresh listing, so the sidebar and the
+    // selection are rebuilt from the store rather than from local state.
+    await waitFor(() => expect(ListPasswords).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByTestId('move-target')).not.toBeInTheDocument())
+  })
+
+  // The tree collapses folders that have never been opened, and a move can drop
+  // an entry into a folder that did not exist a moment ago. If the new folder
+  // stayed collapsed the row would not be rendered at all, leaving the entry
+  // selected and named in the detail pane with nothing to point at on screen.
+  it('opens the folders on the way to the moved entry', async () => {
+    const store = ['github/personal']
+    IsUnlocked.mockResolvedValue(true)
+    ListPasswords.mockImplementation(async () => [...store])
+    MovePassword.mockImplementation(async (_from: string, to: string) => {
+      store.splice(store.indexOf('github/personal'), 1)
+      store.push(to)
+      return 'Moved github/personal to archive/2026/personal'
+    })
+    render(App)
+    await selectEntry()
+
+    const dialog = await openMoveDialog()
+    await fireEvent.input(within(dialog).getByTestId('move-target'), {
+      target: {value: 'archive/2026/personal'},
+    })
+    await fireEvent.click(within(dialog).getByRole('button', {name: 'Move'}))
+
+    // Rows only exist for folders that are open, so finding the entry at its
+    // new path is itself the assertion that archive and archive/2026 were
+    // expanded by the move.
+    await waitFor(() => expect(screen.getByTitle('archive/2026/personal')).toBeInTheDocument())
+    expect(screen.queryByTitle('github/personal')).not.toBeInTheDocument()
+    // The selection followed the rename, so the detail pane names the new path.
+    await screen.findByRole('heading', {level: 2, name: 'archive/2026/personal'})
+  })
+
+  it('keeps the dialog open and shows the error when the move is refused', async () => {
+    vault('github/personal')
+    MovePassword.mockRejectedValue('already exists: work/personal')
+    render(App)
+    await selectEntry()
+
+    const dialog = await openMoveDialog()
+    await fireEvent.input(within(dialog).getByTestId('move-target'), {target: {value: 'work/personal'}})
+    await fireEvent.click(within(dialog).getByRole('button', {name: 'Move'}))
+
+    // The refusal is shown in the dialog and in the toast, as it is for the
+    // edit dialog: the toast is what a user sees if they look away from the
+    // form, and the inline copy is what stays on screen with the path.
+    await within(dialog).findByText('already exists: work/personal')
+    expect(screen.getAllByText('already exists: work/personal')).toHaveLength(2)
+    // Still open, so the path can be corrected instead of retyped from scratch,
+    // and nothing was re-listed because nothing changed.
+    expect(within(dialog).getByTestId('move-target')).toBeInTheDocument()
+    expect(ListPasswords).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses an empty path without calling the backend', async () => {
+    vault('github/personal')
+    render(App)
+    await selectEntry()
+
+    const dialog = await openMoveDialog()
+    await fireEvent.input(within(dialog).getByTestId('move-target'), {target: {value: '   '}})
+    await fireEvent.click(within(dialog).getByRole('button', {name: 'Move'}))
+
+    await within(dialog).findByText('Enter a new password path')
+    expect(MovePassword).not.toHaveBeenCalled()
+  })
+
+  it('closes on Cancel without calling the backend', async () => {
+    vault('github/personal')
+    render(App)
+    await selectEntry()
+
+    const dialog = await openMoveDialog()
+    await fireEvent.click(within(dialog).getByRole('button', {name: 'Cancel'}))
+
+    await waitFor(() => expect(screen.queryByTestId('move-target')).not.toBeInTheDocument())
+    expect(MovePassword).not.toHaveBeenCalled()
   })
 })
 

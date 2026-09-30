@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Move and rename password entries (GH #34).** An entry could be created,
+  edited and deleted, but never renamed: changing the last segment of a path
+  meant creating a second entry and deleting the first, which re-encrypts the
+  secret and drops any TOTP or note detail that was not copied across by hand.
+  A **Move** button next to Edit and Delete opens a dialog pre-filled with the
+  current path, so the common case is editing the last segment and a longer path
+  moves the entry into that folder, creating it. The CLI gains
+  `mv <from> <to>` for the same thing.
+
+  The stored `*.gpg` file is **renamed, never re-encrypted**: a move does not
+  decrypt, does not re-resolve the store's recipients, and cannot expose or
+  alter a secret on the way to its new path. A move onto an existing entry is
+  refused rather than replacing it, and a case-only rename (`github/x` →
+  `GitHub/x`) is a real rename rather than a no-op, which on Windows needs an
+  intermediate file name because the two names are one file on disk.
+
+  In a git store a move is committed as the pair of changes it is — the old path
+  leaves the index and the new one enters it in a single commit. Staging only one
+  half, as a one-path commit would, leaves the other for the next commit on that
+  repository to pick up, so a synced store could bring the entry back under its
+  old name. The GUI also opens the folders leading to a moved entry, so a row
+  moved into a folder that did not exist a moment ago is not selected-and-hidden
+  behind a collapsed folder.
+
 - **Key generation and store creation, without `gpg` or `pass init`.** A user
   with nothing on their machine could previously only clone a store somebody else
   had created, so the app was unusable without an existing `pass` installation

@@ -712,6 +712,73 @@ func TestReleaseSmokeEditSemantics(t *testing.T) {
 	})
 }
 
+// TestReleaseSmokeMoveSemantics pins the behaviour behind the Move button: a
+// rename that keeps the entry's content, and a move that cannot quietly
+// overwrite the entry it lands on.
+func TestReleaseSmokeMoveSemantics(t *testing.T) {
+	v := onboard(t, t.TempDir())
+	seedEntries(t, v)
+
+	t.Run("RenameKeepsTheEntryIntact", func(t *testing.T) {
+		before := mustShow(t, v, "github/personal")
+		if _, err := v.app.MovePassword("github/personal", "github/work"); err != nil {
+			t.Fatalf("MovePassword: %v", err)
+		}
+		if plain := mustShow(t, v, "github/work"); plain != before {
+			t.Fatalf("moved entry = %q, want the original %q", plain, before)
+		}
+		if _, err := v.app.ShowPassword("github/personal"); err == nil {
+			t.Error("the old path still resolves after a move")
+		}
+	})
+
+	t.Run("MoveIntoAnotherFolder", func(t *testing.T) {
+		if _, err := v.app.MovePassword("github/work", "archive/2026/personal"); err != nil {
+			t.Fatalf("MovePassword: %v", err)
+		}
+		got := entriesOf(t, v)
+		want := []string{"archive/2026/personal", "example.com/bob", "totp/entry"}
+		if len(got) != len(want) {
+			t.Fatalf("ListPasswords = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("ListPasswords = %v, want %v", got, want)
+			}
+		}
+	})
+
+	t.Run("RefusesToOverwriteAnEntry", func(t *testing.T) {
+		if _, err := v.app.MovePassword("archive/2026/personal", "example.com/bob"); err == nil {
+			t.Fatal("MovePassword overwrote an existing entry")
+		}
+		// The refused move changed nothing, including the source it would
+		// have removed.
+		if _, err := v.app.ShowPassword("archive/2026/personal"); err != nil {
+			t.Errorf("a refused move lost the source entry: %v", err)
+		}
+		if _, err := v.app.ShowPassword("example.com/bob"); err != nil {
+			t.Errorf("a refused move lost the destination entry: %v", err)
+		}
+		if got := len(entriesOf(t, v)); got != 3 {
+			t.Errorf("entry count = %d, want 3", got)
+		}
+	})
+
+	t.Run("RejectsEmptyAndUnknownPaths", func(t *testing.T) {
+		for _, c := range []struct{ from, to string }{
+			{"", "x"},
+			{"archive/2026/personal", ""},
+			{"does/not/exist", "x"},
+			{"archive/2026/personal", "archive/2026/personal"},
+		} {
+			if _, err := v.app.MovePassword(c.from, c.to); err == nil {
+				t.Errorf("MovePassword(%q, %q) should have been rejected", c.from, c.to)
+			}
+		}
+	})
+}
+
 // TestReleaseSmokeEntryFeatures covers the per-entry actions the detail pane
 // offers: login extraction and TOTP detection.
 func TestReleaseSmokeEntryFeatures(t *testing.T) {

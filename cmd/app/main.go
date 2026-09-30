@@ -32,6 +32,8 @@ Passwords
   copy <path>                  Copy the password to the clipboard (auto-clears)
   save <path> <file>           Save encrypted plaintext from a file ('-' = stdin)
   edit <path> [--no-commit]    Edit plaintext, re-encrypt (atomic), then commit
+  mv   <from> <to>             Rename or move a password entry
+  rm   <path>                  Remove a password entry
 
 Git
   status                       Git status of the store

@@ -450,6 +450,48 @@ func (g *GUI) RemovePassword(name string) error {
 	return g.core.RemovePassword(strings.TrimSpace(name))
 }
 
+// MovePassword renames an entry or moves it into another folder. The stored
+// ciphertext is renamed, never re-encrypted, so no plaintext is handled and
+// the entry keeps the exact bytes it had. A move onto an existing entry is
+// refused rather than replacing it.
+func (g *GUI) MovePassword(from, to string) (string, error) {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" {
+		return "", errors.New("select a password to move")
+	}
+	if to == "" {
+		return "", errors.New("enter a new password path")
+	}
+	if strings.HasSuffix(to, "/") || strings.HasSuffix(to, "\\") {
+		return "", errors.New("password path cannot end with a slash")
+	}
+	exists, err := g.core.PasswordExists(from)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("password not found: %s", from)
+	}
+	// A move to the same name is a no-op the user did not ask for, and a move
+	// onto a different existing entry would destroy it. Case is compared
+	// loosely because a case-only rename is a real request: Windows filesystems
+	// do not distinguish the two names on disk.
+	if !strings.EqualFold(from, to) {
+		exists, err := g.core.PasswordExists(to)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return "", fmt.Errorf("already exists: %s", to)
+		}
+	}
+	if err := g.core.MovePassword(from, to); err != nil {
+		return "", err
+	}
+	return "Moved " + from + " to " + to, nil
+}
+
 // Picked is the result of a native file/directory dialog.
 type Picked struct {
 	Path     string `json:"path"`
