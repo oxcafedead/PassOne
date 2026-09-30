@@ -59,6 +59,10 @@ func (a *App) ListPasswords() ([]string, error) { return a.gui.ListPasswords() }
 // ShowPassword decrypts and returns an entry's full plaintext.
 func (a *App) ShowPassword(name string) (string, error) { return a.gui.ShowPassword(name) }
 
+// ShowNotes returns an entry's notes — everything below its password line — for
+// the edit form. The password is not part of the answer.
+func (a *App) ShowNotes(name string) (string, error) { return a.gui.ShowNotes(name) }
+
 // CopyPassword copies the first line of an entry to the clipboard.
 func (a *App) CopyPassword(name string) error { return a.gui.CopyPassword(name) }
 

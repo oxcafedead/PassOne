@@ -51,6 +51,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs work, and the create form shows the resolved path before anything is
   written.
 
+### Fixed
+
+- **Opening Edit no longer hides an entry's notes, so an edit cannot silently
+  drop them (GH #39).** The dialog opened with an empty notes box and an empty
+  password box, which is the one state that cannot distinguish "the notes I
+  meant to change" from "leave the notes alone" and "delete the notes". Editing
+  a password replaced every note the entry had unless they were retyped from the
+  view pane by hand, and editing one note replaced the rest. Opening Edit now
+  loads the entry's notes into the box, so the field is the notes themselves and
+  the common cases — change the password, append a line, fix a typo — do what
+  they say. The CLI already did this: `edit` opens the stored entry in
+  `$EDITOR`.
+
+  The password is deliberately **not** part of that load. `ShowNotes` returns
+  everything below the password line, so the dialog's password field still opens
+  empty, an empty field still means "keep the stored secret", and the secret is
+  not put in the renderer on the way to the form. A load that fails opens no
+  dialog at all, rather than an empty one whose save would read as a deletion.
+
+  Because the box now opens full, an emptied box means the user deleted the
+  notes, and `UpdatePassword` takes the body it is given as the entry's whole
+  new notes — so a no-op save is decided in the form, which is the only place
+  that knows what the field opened with, instead of re-encrypting identical
+  plaintext and committing it to git again.
+
 ### Security
 
 - A generated OpenPGP key is stored only in the app's sealed vault, so its

@@ -70,6 +70,8 @@ export function SetGitAuthor(arg1:string,arg2:string):Promise<void>;
 
 export function SetUsernameSource(arg1:string):Promise<void>;
 
+export function ShowNotes(arg1:string):Promise<string>;
+
 export function ShowPassword(arg1:string):Promise<string>;
 
 export function Status():Promise<string>;

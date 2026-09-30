@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
@@ -670,16 +671,16 @@ func TestReleaseSmokeEditSemantics(t *testing.T) {
 		}
 	})
 
-	t.Run("EditWithNothingToChangeIsANoOp", func(t *testing.T) {
-		msg, err := v.app.UpdatePassword("web/mail", "", "", true)
-		if err != nil {
+	t.Run("EditWithEmptyNotesClearsThem", func(t *testing.T) {
+		// The dialog always opens with the entry's current notes in the field, so
+		// an empty body is the user deleting them rather than a second way of
+		// saying "leave them alone". Deciding that a save changed nothing is the
+		// form's job, because only it knows what the field opened with.
+		if _, err := v.app.UpdatePassword("web/mail", "", "", true); err != nil {
 			t.Fatalf("UpdatePassword: %v", err)
 		}
-		if msg == "" {
-			t.Error("expected a message describing the no-op")
-		}
-		if plain := mustShow(t, v, "web/mail"); plain != "pw2\nthird\n" {
-			t.Fatalf("a no-op edit changed the entry: %q", plain)
+		if plain := mustShow(t, v, "web/mail"); plain != "pw2\n" {
+			t.Fatalf("an empty body must clear the notes, got %q", plain)
 		}
 	})
 
@@ -690,7 +691,7 @@ func TestReleaseSmokeEditSemantics(t *testing.T) {
 		if _, err := v.app.UpdatePassword("does/not/exist", "pw", "", false); err == nil {
 			t.Error("UpdatePassword should not create a missing entry")
 		}
-		if plain := mustShow(t, v, "web/mail"); plain != "pw2\nthird\n" {
+		if plain := mustShow(t, v, "web/mail"); plain != "pw2\n" {
 			t.Fatalf("a rejected edit changed the entry: %q", plain)
 		}
 	})
@@ -841,6 +842,25 @@ func TestReleaseSmokeEntryFeatures(t *testing.T) {
 		}
 		if has {
 			t.Error("HasTOTP = true for an entry with no otpauth URI")
+		}
+	})
+
+	t.Run("ShowNotesIsTheBodyWithoutThePassword", func(t *testing.T) {
+		// The edit dialog opens with this, so the answer must be the notes and
+		// only the notes: the password line is what the dialog's password field
+		// must not be given, and it is dropped here rather than in the renderer.
+		got, err := v.app.ShowNotes("github/personal")
+		if err != nil {
+			t.Fatalf("ShowNotes: %v", err)
+		}
+		if got != "url: https://github.com\nuser: alice\n" {
+			t.Errorf("ShowNotes = %q", got)
+		}
+		if plain := mustShow(t, v, "github/personal"); !strings.HasPrefix(plain, "hunter2\n") {
+			t.Errorf("ShowPassword = %q, want it to start with the password line", plain)
+		}
+		if _, err := v.app.ShowNotes("does/not/exist"); err == nil {
+			t.Error("ShowNotes should fail for a missing entry")
 		}
 	})
 

@@ -23,6 +23,7 @@ const defaults = {
   }),
   ListPasswords: async () => [] as string[],
   ShowPassword: async () => 'hunter2\nrecovery codes',
+  ShowNotes: async () => 'recovery codes',
   CopyPassword: async () => undefined,
   CopyKeyID: async () => undefined,
   CopyUsername: async () => undefined,

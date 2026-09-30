@@ -138,6 +138,10 @@ export function SetUsernameSource(arg1) {
   return window['go']['main']['App']['SetUsernameSource'](arg1);
 }
 
+export function ShowNotes(arg1) {
+  return window['go']['main']['App']['ShowNotes'](arg1);
+}
+
 export function ShowPassword(arg1) {
   return window['go']['main']['App']['ShowPassword'](arg1);
 }

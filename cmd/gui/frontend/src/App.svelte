@@ -6,6 +6,7 @@
     AppInfo,
     ListPasswords,
     ShowPassword,
+    ShowNotes,
     CopyPassword,
     CopyKeyID,
     CopyUsername,
@@ -153,6 +154,11 @@
   let edPass: string = ''
   let edConfirm: string = ''
   let edBody: string = ''
+  // The notes the dialog was opened with, which is what `edBody` starts as and
+  // what a save is compared against: a save that leaves both alone is a no-op
+  // here rather than a re-encrypt of identical plaintext, so an untouched Save
+  // does not commit the file again for nothing.
+  let edOrig: string = ''
   let edBusy: boolean = false
   let edError: string = ''
   // Rename/move dialog. `moving` holds the entry being moved, so the dialog
@@ -669,8 +675,7 @@
     copiedTOTPName = null
     error = ''
     armDelete = false
-    editing = null
-    edError = ''
+    closeEdit()
     moving = null
     mvTarget = ''
     mvError = ''
@@ -1205,28 +1210,60 @@
     }
   }
 
-  function openAdd(): void {
-    error = ''
-    armDelete = false
+  function closeEdit(): void {
+    editing = null
     edName = ''
     edPass = ''
     edConfirm = ''
+    // Drop the decrypted notes with the dialog. The field is the only place they
+    // exist in the renderer, and a closed dialog is not a reason to keep them.
     edBody = ''
+    edOrig = ''
     edError = ''
+  }
+
+  function openAdd(): void {
+    error = ''
+    armDelete = false
+    closeEdit()
     editing = {mode: 'add'}
   }
 
-  function openEdit(): void {
-    if (!selected) {
+  // Opening the dialog decrypts the entry, because the notes field starts with
+  // the entry's current notes: an edit that only changes the password used to
+  // have them retyped from the view pane by hand, and one that changed a note
+  // replaced the rest. The password is not part of that answer — the dialog's
+  // password field stays empty, so an empty field still means "keep the stored
+  // secret" — which is why this asks for the notes alone instead of reusing the
+  // full-plaintext call the view pane uses.
+  async function openEdit(): Promise<void> {
+    const name = selected
+    if (!name) {
       return
     }
     error = ''
     armDelete = false
     edPass = ''
     edConfirm = ''
-    edBody = ''
     edError = ''
-    editing = {mode: 'edit', name: selected}
+    let notes: string
+    try {
+      notes = await ShowNotes(name)
+    } catch (e) {
+      // Refuse to open rather than open an empty box. Nothing here would say the
+      // notes failed to load, and an empty notes field now means "delete them",
+      // so a save after a failed load would quietly drop what the entry holds.
+      flash(String(e), true)
+      return
+    }
+    // The decrypt is awaited, so a lock or a different row picked in the
+    // meantime must not leave notes sitting in a dialog about another entry.
+    if (selected !== name) {
+      return
+    }
+    edBody = notes
+    edOrig = notes
+    editing = {mode: 'edit', name}
   }
 
   function toggleDeleteArm(): void {
@@ -1303,22 +1340,23 @@
       if (editing.mode === 'add') {
         const msg = await CreatePassword(edName.trim(), edPass, edConfirm, edBody)
         const created = edName.trim()
-        editing = null
-        edName = ''
-        edPass = ''
-        edConfirm = ''
-        edBody = ''
+        closeEdit()
         flash(msg)
         await refresh()
         await select(created)
       } else {
         const name = editing.name
+        if (keepPassword && edBody === edOrig) {
+          // The notes are exactly what the entry already holds and no new
+          // password was typed. The backend cannot tell this from a real
+          // notes-only edit, so the comparison happens here, where what the
+          // field opened with is known.
+          closeEdit()
+          flash('No changes to ' + name)
+          return
+        }
         const msg = await UpdatePassword(name, edPass.trim(), edBody, keepPassword)
-        editing = null
-        edName = ''
-        edPass = ''
-        edConfirm = ''
-        edBody = ''
+        closeEdit()
         selected = name
         // Never auto-reveal after an edit: only an explicit Show decrypts.
         detail = ''
@@ -1813,19 +1851,23 @@
         <label class="text-faint flex flex-col gap-1 text-xs">
           Notes
           <textarea
+            data-testid="ed-body"
             bind:value={edBody}
             rows="4"
-            placeholder={editing.mode === 'edit' ? 'Empty keeps current notes' : 'usernames, urls, backup codes…'}
+            placeholder={editing.mode === 'edit' ? 'No notes' : 'usernames, urls, backup codes…'}
             class="input rounded-lg px-3 py-2 font-mono text-xs"
           ></textarea>
         </label>
+        {#if editing.mode === 'edit'}
+          <p class="text-faint text-xs">
+            Notes are shown as they are stored, password line excluded. Saving with the box emptied
+            deletes them.
+          </p>
+        {/if}
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"
-            on:click={() => {
-              editing = null
-              edError = ''
-            }}
+            on:click={closeEdit}
             class="btn-ghost rounded-lg px-3 py-2 text-sm"
           >
             Cancel

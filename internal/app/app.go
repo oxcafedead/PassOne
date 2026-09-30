@@ -806,6 +806,25 @@ func (a *App) ShowPassword(name string) ([]byte, error) {
 	return plaintext, nil
 }
 
+// Notes decrypts the named entry and returns everything below its first line.
+// The first line is the password, and it is dropped here rather than in the
+// caller: a caller that only wants the notes — a form prefilling its notes
+// field, for instance — has no business receiving the secret, and the field
+// that takes the password is the one that must not be prefilled. An entry with
+// no body has no notes, which is the empty string and not an error.
+func (a *App) Notes(name string) (string, error) {
+	plaintext, err := a.ShowPassword(name)
+	if err != nil {
+		return "", err
+	}
+	defer security.Zero(plaintext)
+	text := string(plaintext)
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		return text[i+1:], nil
+	}
+	return "", nil
+}
+
 // ShowTOTP decrypts the named entry, extracts the otpauth:// URI and generates
 // the current time-based one-time password.
 func (a *App) ShowTOTP(name string) (string, error) {

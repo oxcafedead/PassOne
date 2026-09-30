@@ -247,6 +247,29 @@ entry throws on `mount`) and deliberately omits the Tailwind plugin, which has
 no named ESM export. `tsconfig.json` includes `test/**/*.ts` and
 `vitest.config.ts` so `npm run check` covers them.
 
+### The edit form is always opened with the entry's notes (GH #39)
+
+`openEdit` decrypts the entry through `ShowNotes` before it opens the dialog, and
+`edBody` starts as a copy of them (`edOrig` keeps the original). Two properties
+follow, and both are load-bearing rather than stylistic:
+
+- **An edit dialog in edit mode is never open with an empty notes box that the
+  user did not empty.** A failed `ShowNotes` opens no dialog at all, and the
+  await is guarded by `selected !== name` so a lock or a row change in the
+  meantime cannot drop notes into a dialog about another entry. If you ever
+  reopen the dialog without loading the notes, an emptied box becomes
+  indistinguishable from "delete the notes" and a save destroys them.
+- **`ShowNotes` returns the body only, never the password line.** The password
+  field opening empty is what keeps "empty means keep the stored secret" true, so
+  the prefill must not be a full-plaintext call. The DOM test asserts
+  `ShowPassword` is called zero times by the edit flow.
+
+`body` is therefore the entry's whole new notes, and an empty `body` clears them
+(`internal/ui.UpdatePassword` no longer short-circuits an empty body to "No
+changes"). The no-op decision moved to the form, the only place that knows what
+the field opened with: an unchanged save reports `No changes to <name>` and does
+not re-encrypt identical plaintext just to commit the file again.
+
 Recommended local order before pushing:
 
 1. `gofmt -w .`

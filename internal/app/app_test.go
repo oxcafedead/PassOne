@@ -2896,6 +2896,55 @@ func unlockWithStore(t *testing.T) *App {
 	return a
 }
 
+func TestNotes(t *testing.T) {
+	a := unlockWithStore(t)
+
+	if err := a.SavePassword("site", []byte("secret\nuser: alice\nurl: https://site.com\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	// The two shapes an entry can take: a body, and a password with nothing
+	// below it. pass writes a trailing newline, so the second case is a stored
+	// file whose only line is the password.
+	if err := a.SavePassword("bare", []byte("secret")); err != nil {
+		t.Fatalf("SavePassword bare: %v", err)
+	}
+	if err := a.SavePassword("empty-line", []byte("secret\n")); err != nil {
+		t.Fatalf("SavePassword empty line: %v", err)
+	}
+
+	cases := map[string]string{
+		"site":       "user: alice\nurl: https://site.com\n",
+		"bare":       "",
+		"empty-line": "",
+	}
+	for name, want := range cases {
+		got, err := a.Notes(name)
+		if err != nil {
+			t.Fatalf("Notes(%q): %v", name, err)
+		}
+		if got != want {
+			t.Errorf("Notes(%q) = %q, want %q", name, got, want)
+		}
+		// The password must not survive anywhere in the answer: this is the
+		// call that prefills an edit form's notes field.
+		if strings.Contains(got, "secret") {
+			t.Errorf("Notes(%q) leaked the password: %q", name, got)
+		}
+	}
+
+	if _, err := a.Notes("missing"); err == nil {
+		t.Error("expected Notes on a missing entry to fail")
+	}
+	if _, err := a.Notes("site"); err != nil {
+		t.Errorf("re-reading notes should not be a one-shot: %v", err)
+	}
+
+	a.Lock()
+	if _, err := a.Notes("site"); err == nil {
+		t.Error("expected Notes to fail while locked")
+	}
+}
+
 func TestUsername(t *testing.T) {
 	a := unlockWithStore(t)
 	if a.UsernameSource() != "auto" {

@@ -404,18 +404,63 @@ func TestUpdatePasswordHappyPath(t *testing.T) {
 		t.Fatalf("message = %q", msg)
 	}
 
-	// keepPassword with no body should report no changes.
+	// An empty body with keepPassword clears the notes. The dialog is always
+	// opened with the entry's current notes in the field, so empty is a decision
+	// to delete rather than a request to leave them alone.
 	msg, err = g.UpdatePassword("site.com", "", "", true)
 	if err != nil {
 		t.Fatalf("UpdatePassword keep: %v", err)
 	}
-	if !strings.Contains(msg, "No changes") {
+	if !strings.Contains(msg, "Saved site.com") {
 		t.Fatalf("message = %q", msg)
+	}
+	plain, err := g.ShowPassword("site.com")
+	if err != nil {
+		t.Fatalf("ShowPassword: %v", err)
+	}
+	if plain != "new\n" {
+		t.Fatalf("entry = %q, want the password with no notes", plain)
 	}
 
 	// Missing entry should fail.
 	if _, err := g.UpdatePassword("missing", "x", "", false); err == nil {
 		t.Fatal("expected missing entry to fail")
+	}
+}
+
+func TestShowNotesReturnsTheBodyWithoutThePassword(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	if _, err := g.CreatePassword("site.com", "secret", "secret", "user: alice\nurl: https://site.com\n"); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	if _, err := g.CreatePassword("bare.com", "secret", "secret", ""); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+
+	notes, err := g.ShowNotes("site.com")
+	if err != nil {
+		t.Fatalf("ShowNotes: %v", err)
+	}
+	if notes != "user: alice\nurl: https://site.com\n" {
+		t.Fatalf("ShowNotes = %q", notes)
+	}
+	// The password must not be anywhere in the answer: this is the call that
+	// prefills the edit form, whose password field has to stay empty.
+	if strings.Contains(notes, "secret") {
+		t.Fatalf("ShowNotes leaked the password: %q", notes)
+	}
+
+	// An entry with no body has no notes, which is not an error.
+	notes, err = g.ShowNotes("bare.com")
+	if err != nil {
+		t.Fatalf("ShowNotes bare: %v", err)
+	}
+	if notes != "" {
+		t.Fatalf("ShowNotes on a bodyless entry = %q", notes)
+	}
+
+	if _, err := g.ShowNotes("missing"); err == nil {
+		t.Error("expected ShowNotes on a missing entry to fail")
 	}
 }
 

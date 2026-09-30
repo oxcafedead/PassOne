@@ -21,6 +21,7 @@ const {
   MovePassword,
   RemovePassword,
   RevealPath,
+  ShowNotes,
   ShowPassword,
   Unlock,
   UpdatePassword,
@@ -33,6 +34,10 @@ function vault(entry = 'github/personal', plaintext = 'hunter2\nrecovery codes')
   IsUnlocked.mockResolvedValue(true)
   ListPasswords.mockResolvedValue([entry])
   ShowPassword.mockResolvedValue(plaintext)
+  // The edit dialog's notes come out of the same entry content with the password
+  // line dropped, which is the rule the Go side applies, so a test that changes
+  // the fixture changes both.
+  ShowNotes.mockResolvedValue(plaintext.split('\n').slice(1).join('\n'))
 }
 
 function locked(): void {
@@ -351,7 +356,26 @@ describe('entry detail', () => {
 })
 
 describe('edit', () => {
-  it('saves notes with an empty password so the current one is kept', async () => {
+  it('opens with the entry notes already in the box', async () => {
+    vault()
+    render(App)
+    await selectEntry()
+
+    await fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+
+    await screen.findByRole('heading', {name: 'Edit entry'})
+    // The dialog opens on the entry's current notes, so an edit that only
+    // touches the password does not silently replace them, and the user does not
+    // retype them from the view pane. Only the notes come back: the password
+    // field is deliberately left empty, so it keeps meaning "keep the stored
+    // secret" and the secret is not put in the renderer to get here.
+    expect(screen.getByTestId('ed-body')).toHaveValue('recovery codes')
+    expect(screen.getByLabelText('New password (leave empty to keep current)')).toHaveValue('')
+    expect(ShowNotes).toHaveBeenCalledWith('github/personal')
+    expect(ShowPassword).toHaveBeenCalledTimes(0)
+  })
+
+  it('saves the notes that are in the box with an empty password so the current one is kept', async () => {
     vault()
     UpdatePassword.mockResolvedValue('Updated github/personal')
     render(App)
@@ -364,15 +388,22 @@ describe('edit', () => {
     // The dialog starts blank: it must not prefill a secret the user did not ask for.
     expect(screen.getByLabelText('New password (leave empty to keep current)')).toHaveValue('')
 
-    await fireEvent.input(screen.getByPlaceholderText('Empty keeps current notes'), {
-      target: {value: 'new notes'},
+    // Appending to what the dialog opened with is the point of the prefill: the
+    // existing note survives an edit that only adds one.
+    await fireEvent.input(screen.getByTestId('ed-body'), {
+      target: {value: 'recovery codes\nsecond factor'},
     })
     await fireEvent.click(screen.getByRole('button', {name: 'Save'}))
 
     // An empty password plus keepPassword: the Go side splices the original
     // first line back in. A pre-built "password\nnotes" would be a second line.
     await waitFor(() =>
-      expect(UpdatePassword).toHaveBeenCalledWith('github/personal', '', 'new notes', true),
+      expect(UpdatePassword).toHaveBeenCalledWith(
+        'github/personal',
+        '',
+        'recovery codes\nsecond factor',
+        true,
+      ),
     )
     expect(CreatePassword).not.toHaveBeenCalled()
     await screen.findByText('Updated github/personal')
@@ -380,6 +411,55 @@ describe('edit', () => {
     // An edit must not quietly re-decrypt the entry.
     expect(screen.queryByTestId('detail')).not.toBeInTheDocument()
     expect(ShowPassword).toHaveBeenCalledTimes(0)
+  })
+
+  // The notes box opens holding the entry's notes, so an emptied box is the user
+  // deleting them. If the backend read empty as "keep", a save after clearing it
+  // would report success and keep the notes: the argument assertion is the only
+  // thing that catches it.
+  it('sends an empty body when the notes are deleted', async () => {
+    vault()
+    UpdatePassword.mockResolvedValue('Updated github/personal')
+    render(App)
+    await selectEntry()
+
+    await fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+    await screen.findByRole('heading', {name: 'Edit entry'})
+    await fireEvent.input(screen.getByTestId('ed-body'), {target: {value: ''}})
+    await fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+
+    await waitFor(() => expect(UpdatePassword).toHaveBeenCalledWith('github/personal', '', '', true))
+  })
+
+  // Re-encrypting identical plaintext is not free: SavePassword commits, so an
+  // untouched Save in a git store would add a commit that changes nothing.
+  it('does not save when nothing was changed', async () => {
+    vault()
+    render(App)
+    await selectEntry()
+
+    await fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+    await screen.findByRole('heading', {name: 'Edit entry'})
+    await fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+
+    await screen.findByText('No changes to github/personal')
+    expect(UpdatePassword).not.toHaveBeenCalled()
+  })
+
+  // A failed load must not leave an empty box that reads as "delete the notes".
+  // The dialog is refused instead, so the notes can only be edited by a user who
+  // can see them.
+  it('does not open the dialog when the notes cannot be read', async () => {
+    vault()
+    ShowNotes.mockRejectedValue('store is locked')
+    render(App)
+    await selectEntry()
+
+    await fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+
+    await screen.findByText('store is locked')
+    expect(screen.queryByRole('heading', {name: 'Edit entry'})).not.toBeInTheDocument()
+    expect(screen.queryByTestId('ed-body')).not.toBeInTheDocument()
   })
 
   it('rejects a mismatched confirmation without touching the store', async () => {
@@ -431,7 +511,7 @@ describe('edit', () => {
 
     await fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
     await screen.findByRole('heading', {name: 'Edit entry'})
-    await fireEvent.input(screen.getByPlaceholderText('Empty keeps current notes'), {
+    await fireEvent.input(screen.getByTestId('ed-body'), {
       target: {value: 'otpauth://totp/example\nrecovery codes'},
     })
     await fireEvent.click(screen.getByRole('button', {name: 'Save'}))
@@ -451,8 +531,8 @@ describe('edit', () => {
 
     await fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
     await screen.findByRole('heading', {name: 'Edit entry'})
-    await fireEvent.input(screen.getByPlaceholderText('Empty keeps current notes'), {
-      target: {value: 'recovery codes'},
+    await fireEvent.input(screen.getByTestId('ed-body'), {
+      target: {value: 'recovery codes\nthe seed line is gone'},
     })
     await fireEvent.click(screen.getByRole('button', {name: 'Save'}))
 

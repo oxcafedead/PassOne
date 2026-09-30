@@ -297,6 +297,15 @@ func (g *GUI) ShowPassword(name string) (string, error) {
 	return text, nil
 }
 
+// ShowNotes decrypts an entry and returns only its notes, everything below the
+// password line, so the edit dialog can open with the entry's current notes
+// instead of an empty box. The password is deliberately left out of the answer:
+// the dialog's password field must stay empty, and this is the one call that
+// does not put the secret in the renderer.
+func (g *GUI) ShowNotes(name string) (string, error) {
+	return g.core.Notes(name)
+}
+
 // CopyPassword writes the first line of an entry to the Windows clipboard,
 // marked so Clipboard History and the cloud clipboard skip it, and schedules
 // clearing it, mirroring the CLI 'copy' behaviour. The secret is never returned
@@ -403,8 +412,12 @@ func (g *GUI) CreatePassword(name, password, confirm, body string) (string, erro
 
 // UpdatePassword edits an existing entry. With keepPassword set the stored
 // first line is preserved and password is ignored (it may be empty); otherwise
-// password replaces it. An empty body is ambiguous with "keep current notes",
-// so a fully empty body always means "do not touch anything".
+// password replaces it. body is the entry's whole new notes, so an empty body
+// clears them: the edit dialog is always opened with the entry's current notes
+// already in the field, which is what makes "empty" the user's decision to
+// delete rather than a second way of saying "leave them alone". Deciding that a
+// save changed nothing is the form's job, because only it knows what the field
+// opened with.
 func (g *GUI) UpdatePassword(name, password, body string, keepPassword bool) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -425,14 +438,10 @@ func (g *GUI) UpdatePassword(name, password, body string, keepPassword bool) (st
 	if !exists {
 		return "", fmt.Errorf("password not found: %s (use add to create it)", name)
 	}
-	if keepPassword && body == "" {
-		return "No changes to " + name, nil
-	}
 	// Only the body is packed when keeping the stored secret: SetPassword
 	// splices the existing first line back in front of it. Prefixing the
 	// ignored password here would leave a blank line between the secret and
-	// the body, which is what a notes-only edit from the GUI produces (the
-	// edit dialog opens blank, so an untouched password field means "keep").
+	// the body, which is what a notes-only edit from the GUI produces.
 	content := body
 	if !keepPassword {
 		content = password + "\n" + body
