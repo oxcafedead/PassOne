@@ -100,12 +100,17 @@ func TestFromName(t *testing.T) {
 		name string
 		want string
 	}{
-		{"alice@example.com", "alice"},
-		{"work/alice@example.com", "alice"},
+		// An "@" makes the file name an email address, and the whole address is
+		// the login. The local part on its own is not a login (GH #37).
+		{"alice@example.com", "alice@example.com"},
+		{"work/alice@example.com", "alice@example.com"},
+		{"mail/alice+tag@sub.example.co.uk", "alice+tag@sub.example.co.uk"},
+		{"alice@localhost", "alice@localhost"},
 		{"example.com/alice", "alice"},
 		{"example.com", ""},
 		{"work/example.com", "example.com"},
 		{"alice", "alice"},
+		{"  spaced@example.com  ", "spaced@example.com"},
 	}
 	for _, tc := range cases {
 		if got := FromName(tc.name); got != tc.want {
@@ -130,5 +135,12 @@ func TestExtract(t *testing.T) {
 	// Auto falls back to the file name when the body has no field.
 	if got := Extract("sites/example.com/bob", []byte("secret\nurl: x\n"), ModeAuto); got != "bob" {
 		t.Errorf("ModeAuto fallback = %q, want bob", got)
+	}
+	// The file name fallback keeps an email address whole (GH #37).
+	if got := Extract("mail/alice@example.com", []byte("secret\nurl: x\n"), ModeAuto); got != "alice@example.com" {
+		t.Errorf("ModeAuto email fallback = %q, want alice@example.com", got)
+	}
+	if got := Extract("mail/alice@example.com", nil, ModeFilename); got != "alice@example.com" {
+		t.Errorf("ModeFilename email = %q, want alice@example.com", got)
 	}
 }

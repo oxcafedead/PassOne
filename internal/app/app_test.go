@@ -2739,7 +2739,7 @@ func TestUsername(t *testing.T) {
 	if u, err := a.Username("site"); err != nil || u != "alice" {
 		t.Fatalf("Username(site) = %q, %v", u, err)
 	}
-	if u, err := a.Username("email@example.com"); err != nil || u != "email" {
+	if u, err := a.Username("email@example.com"); err != nil || u != "email@example.com" {
 		t.Fatalf("Username(email@example.com) = %q, %v", u, err)
 	}
 	if u, err := a.Username("example.com/alice"); err != nil || u != "alice" {
@@ -2762,7 +2762,7 @@ func TestUsername(t *testing.T) {
 	if err := a.SetUsernameSource("filename"); err != nil {
 		t.Fatalf("SetUsernameSource(filename): %v", err)
 	}
-	if u, err := a.Username("email@example.com"); err != nil || u != "email" {
+	if u, err := a.Username("email@example.com"); err != nil || u != "email@example.com" {
 		t.Fatalf("filename mode Username(email@example.com) = %q, %v", u, err)
 	}
 	if u, err := a.Username("site"); err != nil || u != "site" {

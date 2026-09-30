@@ -127,6 +127,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Copy username dropped the domain.** Clicking *Username* on an entry named
+  `alice@example.com` put `alice` on the clipboard, and the same entry's login
+  read as `alice` everywhere else, because `username.FromName` treated the
+  domain as a site qualifier to be stripped the way it strips a per-site folder
+  from `example.com/alice`. That guess is wrong for the name it was applied to:
+  an `@` makes the file name an email address, and the address *is* the login —
+  the truncated local part signs in nowhere. An `@` in the file name now yields
+  the whole address, in every username-source mode, so *Username* copies
+  `alice@example.com` and the button's tooltip reads the same. GH #37.
 - A store holding no entries showed "Loading…" forever. The tree placeholder
   keyed on "a listing is running", but rows only ever fill from a listing, so an
   empty store's nav had no branch to reach but the placeholder — and the unlock

@@ -263,7 +263,13 @@ func (g *GUI) ClipboardHistoryEnabled() bool {
 
 // copySecret writes a secret to the clipboard and warns the user when Windows
 // could not be asked to keep it out of Clipboard History.
-func (g *GUI) copySecret(text string) error {
+func (g *GUI) copySecret(text string) error { return copyClipboard(g, text) }
+
+// copyClipboard is the single clipboard write every copy action goes through, so
+// the marked write and its caveat cannot drift apart between them. It is
+// indirected so a test can assert the exact text an action produces without
+// putting that text on the machine running the tests.
+var copyClipboard = func(g *GUI, text string) error {
 	res, err := cliputil.Copied(text, g.core.Config().ClipboardClearSeconds)
 	if err != nil {
 		return fmt.Errorf("unable to write to the Windows clipboard: %w", err)

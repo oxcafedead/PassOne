@@ -103,24 +103,29 @@ func normalizeSpace(s string) string {
 
 // FromName derives the login from the entry's file name using the common pass
 // conventions:
-//   - "alice@example.com" stores username alice;
+//   - "alice@example.com" is an email address and is the login whole;
 //   - "example.com/alice" stores username alice in a per-site folder;
 //   - a bare name such as "alice" is itself the login.
 //
 // A bare top-level file that looks like a site (for example "example.com")
 // carries no encoded login.
 func FromName(name string) string {
-	base := name[strings.LastIndex(name, "/")+1:]
-	if i := strings.IndexByte(base, '@'); i >= 0 {
-		return strings.TrimSpace(base[:i])
+	base := strings.TrimSpace(name[strings.LastIndex(name, "/")+1:])
+	if strings.Contains(base, "@") {
+		// An "@" makes the file name an email address, and the address is the
+		// login: the domain says which account it belongs to, it is not a site
+		// qualifier to be dropped. Truncating to the local part handed out a
+		// login that cannot sign in anywhere -- the GUI copied "alice" for an
+		// entry named "alice@example.com" (GH #37).
+		return base
 	}
 	if strings.Contains(name, "/") {
-		return strings.TrimSpace(base)
+		return base
 	}
 	if strings.Contains(base, ".") {
 		return ""
 	}
-	return strings.TrimSpace(base)
+	return base
 }
 
 // Extract resolves the login for a password entry according to mode.

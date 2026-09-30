@@ -466,6 +466,69 @@ func TestListShowCopyPassword(t *testing.T) {
 	}
 }
 
+// recordCopies swaps the clipboard sink for a recorder, so a test can pin the
+// exact text a copy action hands over without that text ever reaching the real
+// clipboard of the machine running the tests.
+func recordCopies(t *testing.T) *[]string {
+	t.Helper()
+	var got []string
+	prev := copyClipboard
+	copyClipboard = func(_ *GUI, text string) error {
+		got = append(got, text)
+		return nil
+	}
+	t.Cleanup(func() { copyClipboard = prev })
+	return &got
+}
+
+func TestCopyUsernameCopiesTheWholeLogin(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	copied := recordCopies(t)
+
+	// An entry named after an email address carries the address as its login:
+	// the domain says which account it is, so the copy has to keep it. It used
+	// to stop at the "@" and hand over "alice", which signs in nowhere
+	// (GH #37).
+	if _, err := g.CreatePassword("mail/alice@example.com", "secret", "secret", "url: https://example.com"); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	if _, err := g.CreatePassword("site.com/bob", "secret", "secret", "user: bob"); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	if _, err := g.CreatePassword("example.com", "secret", "secret", ""); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+
+	if err := g.CopyUsername("mail/alice@example.com"); err != nil {
+		t.Fatalf("CopyUsername: %v", err)
+	}
+	if len(*copied) != 1 || (*copied)[0] != "alice@example.com" {
+		t.Fatalf("clipboard = %q, want [alice@example.com]", *copied)
+	}
+
+	// A login field in the body still wins in auto mode, and it is copied
+	// verbatim rather than being read back out of the entry name.
+	if err := g.CopyUsername("site.com/bob"); err != nil {
+		t.Fatalf("CopyUsername: %v", err)
+	}
+	if len(*copied) != 2 || (*copied)[1] != "bob" {
+		t.Fatalf("clipboard = %q, want bob", *copied)
+	}
+
+	// A file name that is only a site encodes no login, so nothing is copied
+	// and the user is told why rather than being handed an empty clipboard.
+	*copied = nil
+	if err := g.CopyUsername("example.com"); err == nil {
+		t.Fatal("expected CopyUsername to fail for an entry with no login")
+	}
+	if len(*copied) != 0 {
+		t.Fatalf("clipboard = %q, want nothing written", *copied)
+	}
+	if err := g.CopyUsername("missing/entry"); err == nil {
+		t.Fatal("expected CopyUsername to fail for a missing entry")
+	}
+}
+
 func TestDialogNilContext(t *testing.T) {
 	g := newTestGUI(t)
 	if _, err := g.PickPrivateKey(""); err == nil {
