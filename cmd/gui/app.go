@@ -190,6 +190,12 @@ func (a *App) Sync() (string, error) { return a.gui.Sync() }
 // KnownHosts lists trusted SSH hosts.
 func (a *App) KnownHosts() []string { return a.gui.KnownHosts() }
 
+// CheckForUpdates asks GitHub whether a newer published PassOne release exists.
+//
+// Nothing is downloaded, replaced or installed: the answer is a message for the
+// UI to show, and the caller decides whether it is worth interrupting for.
+func (a *App) CheckForUpdates() (ui.UpdateInfo, error) { return a.gui.CheckForUpdates() }
+
 func presence(s string) string {
 	if s == "" {
 		return "(none)"

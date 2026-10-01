@@ -7,6 +7,7 @@ import {emit} from './runtime'
 
 const {
   AppInfo,
+  CheckForUpdates,
   ClipboardHistoryEnabled,
   CopyPassword,
   CopyKeyID,
@@ -1264,5 +1265,85 @@ describe('after creating a store', () => {
     await waitFor(() => expect(CreateStore).toHaveBeenCalled())
 
     expect(await screen.findByTitle('fresh/entry')).toBeInTheDocument()
+  })
+})
+
+describe('update check', () => {
+  const upToDate = 'PassOne v0.1.1 is the latest published release'
+  const newer = 'PassOne v0.2.0 is available (this build is v0.1.1)'
+
+  // The startup check resolves a promise after the component has already
+  // rendered, so a test that only awaited the render would read the DOM before
+  // the toast had a chance to appear -- and one that asserts nothing is shown
+  // would pass whether the check had run or not.
+  async function checked(): Promise<void> {
+    await waitFor(() => expect(CheckForUpdates).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  // The whole feature: a published release newer than this build, and nothing
+  // about the vault waiting for the answer.
+  it('announces a newer release in a toast', async () => {
+    CheckForUpdates.mockResolvedValue({available: true, message: newer})
+    vault()
+    render(App)
+
+    await checked()
+    expect(await screen.findByText(newer)).toBeInTheDocument()
+    // The check is not part of load(): an entry is still selectable while the
+    // request is in flight, because nothing here blocks on the network.
+    await selectEntry()
+    expect(await screen.findByTestId('reveal-empty')).toBeInTheDocument()
+  })
+
+  // The startup check has one job -- telling a stale build it is stale. A toast
+  // on every launch saying "you are up to date" is news nobody asked for, and
+  // it would land on top of the messages the launch itself produces.
+  it('says nothing at startup when this build is the latest release', async () => {
+    CheckForUpdates.mockResolvedValue({available: false, message: upToDate})
+    locked()
+    render(App)
+
+    await checked()
+    expect(screen.queryByText(upToDate)).not.toBeInTheDocument()
+  })
+
+  // A check that could not be made is not news either, and treating it as a
+  // result would put "the network is down" in front of a user who never asked.
+  it('says nothing at startup when the check cannot be made', async () => {
+    CheckForUpdates.mockRejectedValue('no such host')
+    locked()
+    render(App)
+
+    await checked()
+    expect(screen.queryByText(/Update check failed/)).not.toBeInTheDocument()
+  })
+
+  // The tray item is a check the user asked for, so it answers either way. The
+  // tray asks the renderer rather than running the check itself, so this pins
+  // the answer coming back out through the same toast.
+  it('answers a check the tray asked for, even when nothing is newer', async () => {
+    CheckForUpdates.mockResolvedValue({available: false, message: upToDate})
+    locked()
+    render(App)
+    await checked()
+    CheckForUpdates.mockClear()
+
+    emit('passone:check-updates')
+
+    expect(await screen.findByText(upToDate)).toBeInTheDocument()
+    expect(CheckForUpdates).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a failed check the tray asked for, instead of silence', async () => {
+    CheckForUpdates.mockResolvedValue({available: false, message: upToDate})
+    locked()
+    render(App)
+    await checked()
+    CheckForUpdates.mockRejectedValue('no such host')
+
+    emit('passone:check-updates')
+
+    expect(await screen.findByText(/Update check failed/)).toBeInTheDocument()
   })
 })

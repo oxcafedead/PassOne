@@ -74,6 +74,12 @@ const defaults = {
   Status: async () => 'ok',
   Sync: async () => 'ok',
   KnownHosts: async () => [] as unknown[],
+  // A released build with nothing newer to report, so the startup check is
+  // silent in every test that does not say otherwise.
+  CheckForUpdates: async () => ({
+    available: false,
+    message: 'PassOne v0.1.1 is the latest published release',
+  }),
 }
 
 export type BridgeName = keyof typeof defaults

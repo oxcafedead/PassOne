@@ -30,6 +30,33 @@ replaced at release time with `-ldflags`:
 Local builds never claim a release version; `passone version` prints
 `PassOne dev` until a release build stamps it.
 
+## The update check
+
+A released GUI build asks `api.github.com/repos/oxcafedead/passone/releases/latest`
+once at startup, off the critical path, and shows a toast if the tag is newer than
+the version it was stamped with. A **Check for updates** item in the tray menu
+repeats the check and always answers.
+
+It **tells the user a release exists; it does not install anything.** No
+artifact is downloaded, verified or run — fetching a replacement for a binary
+that may be holding an unlocked vault is a different decision, and one that
+belongs to the person running the app, not to the app.
+
+Two consequences for cutting a release:
+
+- **Publish the release.** The check reads the *published* release, and the
+  pipeline deliberately creates a draft so the notes can be reviewed first. A
+  draft is invisible to the check, which is the point: a build that is not
+  finished should not be offered to anyone.
+- **Do not pre-release as the stable line.** A pre-release tag
+  (`v1.2.3-rc.1`) is refused by the check even if it were somehow returned as
+  latest, so a `v1.2.0` user is not offered `v1.3.0-rc.1`. A user already
+  running a pre-release is still told when the stable build it leads to lands.
+
+A build with the `dev` version makes no request at all and says so if asked,
+which is why `internal/version.Version` must keep being stamped rather than left
+alone.
+
 ## What the release workflow does
 
 `.github/workflows/release.yml` runs on `v*` tag pushes. It:
@@ -85,4 +112,5 @@ On Windows, `certutil -hashfile Foo.zip SHA256` or PowerShell
 ## Related
 
 - `internal/version` — version string source (see above).
+- `internal/update` — the release lookup and SemVer comparison behind the check.
 - `CHANGELOG.md` — release notes source for the workflow.

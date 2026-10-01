@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tell a stale build that a newer PassOne exists (GH #31).** There was no way
+  to learn about a new release from inside the app: nothing printed its own
+  version, and the only route to a newer build was finding the releases page by
+  hand. A released GUI now asks GitHub once at startup, off the critical path, and
+  says so in a toast when the latest published release is newer than the version
+  it was stamped with. A **Check for updates** item in the tray menu repeats the
+  check and always answers, so "no update" is a result too.
+
+  The check **only tells you**. Nothing is downloaded, verified or installed: a
+  password manager that fetched a replacement for a binary that may be holding an
+  unlocked vault would be a much larger decision than this, and the decision
+  about who may replace the app belongs to the person running it. Fetching the
+  update remains what `RELEASES.md` says it is — download a zip, check it against
+  `SHA256SUMS.txt`.
+
+  Only *published* releases count, so a draft a maintainer has not finished
+  reviewing is never offered, and a `v1.3.0-rc.1` tag is never presented to
+  someone on `v1.2.0` as the stable build. Comparison is full SemVer precedence,
+  which means someone running a release candidate is still told when the stable
+  release it leads to lands.
+
+  A build with the `dev` version — every `wails build` outside the release
+  pipeline — makes no request at all and says so when asked, because `dev` is not
+  a version a tag can be compared against. The startup check is silent when there
+  is nothing newer, and a failed check stays silent too: a toast on every launch
+  saying "you are up to date" is news nobody asked for, and a network error is not
+  news at all.
+
 - **Move and rename password entries (GH #34).** An entry could be created,
   edited and deleted, but never renamed: changing the last segment of a path
   meant creating a second entry and deleting the first, which re-encrypts the

@@ -9,6 +9,11 @@ Security model, threat boundaries, and accepted risks of passone.
 - Every disk-resident secret is wrapped in a vault layer: `Seal(key_disk, …)`
   with AES-256-GCM, where `key_disk = Argon2id(master_passphrase)` is derived in
   memory on every unlock and never written to disk.
+- The only request this app makes over the network is a **read-only** release
+  lookup: at most once per launch it asks `api.github.com` whether a newer
+  PassOne has been published. Nothing local is sent with it — no key identifier,
+  store path, hostname or vault data — and nothing is downloaded, verified or run
+  in reply. See [the update check](../RELEASES.md#the-update-check).
 
 ## Accepted boundaries (threat model)
 
@@ -80,3 +85,8 @@ outside the boundary this design claims.
   states what that leaves behind.
 - **Isolation of the key-owning layer.** The code that holds secrets is kept thin
   and isolated to minimize attack surface.
+- **Nothing replaces the app over the network.** A release check reads a version
+  tag and stops. Fetching an artifact, verifying it and running it — or letting a
+  remote party decide which binary sits next to an unlocked vault — is left to
+  the person using the app, who can check a checksum themselves
+  (`RELEASES.md`, `SHA256SUMS.txt`).

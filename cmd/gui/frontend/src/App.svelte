@@ -44,6 +44,7 @@
     Status,
     Sync,
     KnownHosts,
+    CheckForUpdates,
   } from '../wailsjs/go/main/App.js'
   import {EventsOn} from '../wailsjs/runtime/runtime.js'
 
@@ -65,6 +66,14 @@
   interface PickedDlg {
     path: string
     canceled: boolean
+  }
+
+  // What one update check found. The wording is the backend's, because the two
+  // version strings it is built from are the whole answer; this decides only
+  // whether there is anything worth interrupting for.
+  interface UpdateInfo {
+    available: boolean
+    message: string
   }
 
   // One row of the lock screen's location list.
@@ -243,6 +252,31 @@
     statusTimer = setTimeout(() => {
       status = ''
     }, isError ? 6000 : 4500)
+  }
+
+  // Ask GitHub whether a newer PassOne release has been published, and say so in
+  // the same toast as everything else.
+  //
+  // quiet is the whole of the difference between the two callers. The startup
+  // check passes true and stays silent unless there is a newer release: a check
+  // that answered "you are up to date" on every launch would spend the toast on
+  // news nobody asked for. The tray item passes false and always answers,
+  // because there the user is the one who asked.
+  //
+  // Nothing here is awaited by the mount path, so the window paints while the
+  // request is in flight and a slow or unreachable api.github.com cannot hold up
+  // the unlock screen.
+  async function checkForUpdates(quiet: boolean): Promise<void> {
+    try {
+      const info: UpdateInfo = await CheckForUpdates()
+      if (info.available || !quiet) {
+        flash(info.message)
+      }
+    } catch (e) {
+      if (!quiet) {
+        flash('Update check failed: ' + String(e), true)
+      }
+    }
   }
 
   $: filtered = entries.filter((e) => e.toLowerCase().includes(query.toLowerCase()))
@@ -554,7 +588,14 @@
   // body is authoritative as a fallback.
   $: totpVisible = totpAvailable || (revealed && hasTOTP(detail))
 
-  async function copySecret(name: string): Promise<void> {
+  // The three parameters are `string | null` because `selected` is, and it is
+  // only null with no entry selected -- which is the one state in which none of
+  // the buttons that call these exists. TypeScript cannot see that through the
+  // {#if} block, so the guard is here instead of three non-null assertions.
+  async function copySecret(name: string | null): Promise<void> {
+    if (!name) {
+      return
+    }
     error = ''
     copying = true
     try {
@@ -568,7 +609,10 @@
     }
   }
 
-  async function copyUsername(name: string): Promise<void> {
+  async function copyUsername(name: string | null): Promise<void> {
+    if (!name) {
+      return
+    }
     error = ''
     copyingUsername = true
     try {
@@ -582,7 +626,10 @@
     }
   }
 
-  async function copyTOTPCode(name: string): Promise<void> {
+  async function copyTOTPCode(name: string | null): Promise<void> {
+    if (!name) {
+      return
+    }
     error = ''
     copyingTOTP = true
     try {
@@ -1448,6 +1495,9 @@
 
   onMount(() => {
     void load().then(() => void openSettingsIfFirstRun())
+    // Not awaited, and not part of load(): the vault screen must not wait on the
+    // network to appear.
+    void checkForUpdates(true)
     const offLock = EventsOn('passone:locked', onLockEvent)
     const offUnlock = EventsOn('passone:unlocked', () => {
       unlocked = true
@@ -1459,10 +1509,17 @@
     const offWarning = EventsOn('passone:clipboard-warning', (msg: string) => {
       flash(`Clipboard: ${msg}`, true)
     })
+    // The tray's "Check for updates" item asks the renderer to run the check,
+    // rather than the tray running it itself, so the wording and the toast live
+    // in one place instead of twice.
+    const offUpdateCheck = EventsOn('passone:check-updates', () => {
+      void checkForUpdates(false)
+    })
     return () => {
       offLock()
       offUnlock()
       offWarning()
+      offUpdateCheck()
       stopCountdown()
       stopTOTPCountdown()
       stopLocationCopy()

@@ -28,6 +28,7 @@ Unlike most clients, it does **not** need `gpg.exe`, `git.exe`, or `ssh.exe` ins
 - 🔄 **Git sync** — `clone`, `status`, and `sync` (fetch/pull/push) without an external git installation.
 - 🔒 **Security-first** — keys are sealed with Windows DPAPI; decrypted key material lives in memory only during an unlocked session; idle auto-lock; best-effort memory zeroing.
 - 📋 **Clipboard auto-clear** — copied passwords are removed from the clipboard after a configurable timeout, and are marked so Windows keeps them out of Clipboard History and the cloud clipboard.
+- 🔔 **Know when a new release exists** — a released build checks GitHub once at startup and says so in a toast, and the tray menu has a **Check for updates** item. It only tells you: nothing is downloaded or installed, so the decision to replace the app stays yours.
 
 ---
 

@@ -27,6 +27,7 @@ Windows password manager (`passone`) backed by a self-contained OpenPGP store. I
 | `internal/security` | DPAPI sealing, memory zeroing |
 | `internal/config` | Config persistence, ACLs, paths |
 | `internal/cliputil` | Clipboard write, auto-clear, Clipboard History markers |
+| `internal/update` | "Is there a newer release?" — GitHub lookup + SemVer precedence |
 | `internal/version` | Single release-version source; injected via `-ldflags` at build time |
 | `tools/checkicon` | CI gate: asserts the GUI exe embeds an icon resource |
 | `tools/checkui` | CI gate: asserts no Svelte component has dead interactivity and no renderer escape hatch (`{@html}`, `innerHTML`, missing CSP) |
@@ -300,8 +301,61 @@ Recommended local order before pushing:
 
 1. `gofmt -w .`
 2. `go test ./...`
-3. `cd cmd/gui/frontend && npm test`
+3. `cd cmd/gui/frontend && npm test && npm run check`
 4. `golangci-lint` (via `go run ...`)
+
+### The update check tells a stale build it is stale, and stops there (GH #31)
+
+`internal/update` asks `api.github.com/.../releases/latest` whether a newer
+release exists and compares the tag against `internal/version.Version` by SemVer
+precedence. It **downloads, verifies and installs nothing** — that is the load-
+bearing boundary. A password manager that fetches a replacement for itself over
+the network is a much larger decision than one, and shipping it would mean a
+trust decision about who may replace a binary holding an unlocked vault.
+
+Four properties follow, and each is a test:
+
+- **`internal/update.Latest` refuses a draft or a pre-release.** GitHub's
+  `/releases/latest` already documents that exclusion and the pipeline publishes
+  a tag as a draft first, so the flags are asserted again locally anyway: a
+  promise that lives only in a remote service's documentation is not one this
+  repository can test. Pre-releases are legitimate releases here (RELEASES.md
+  allows `v1.2.3-rc.1` tags), so this is the assertion that keeps a `v1.3.0-rc.1`
+  from being offered to someone on `v1.2.0` as the stable build.
+- **A `dev` build makes no request at all.** `version.Version` defaults to `dev`,
+  which is not a version a tag can be compared against, so `internal/ui`
+  short-circuits on `update.IsRelease` and answers with why. Guessing would
+  either invent an update or hide a real one.
+- **An unparseable version is never newer.** `parseVersion` refuses rather than
+  guesses: four components, a leading zero (`v0.01.1`, `rc.01`), a non-numeric
+  field, and a core component too long for an `int` are all "not a version", so
+  the answer is "no update" rather than a nag about a build that was never
+  tagged. Pre-release numeric identifiers are compared as digit strings, not
+  `strconv.Atoi`, because an identifier longer than an `int64` overflows and
+  would silently become a *text* comparison — under `Atoi`, `rc.100000000000000000000`
+  sorts below `rc.99` because `'1'` precedes `'9'`.
+- **Nothing about the check blocks the app.** The frontend calls
+  `CheckForUpdates` from `onMount` without awaiting it into `load()` — the
+  unlock screen must not wait on the network — and a failure is swallowed when it
+  was not asked for.
+- **The startup check is silent unless there is something to say.** That is the
+  whole of the `quiet` parameter on `checkForUpdates`. A toast on every launch
+  saying "you are up to date" would be news nobody asked for, and it would land
+  on top of the messages the launch itself produces. The tray's **Check for
+  updates** item passes `false` and always answers.
+
+The tray item emits `passone:check-updates` rather than calling the checker
+itself, so one place decides what a check says and one toast says it. The cost is
+that an event only lands if the page is already listening, so a tray click in the
+first moments after launch is dropped — and the startup check that follows the
+page load is what answers instead. `AGENTS.md`'s advice for anything that must
+survive a late listener is to not use an event: the lock and unlock stream and the
+clipboard warning are the two existing cases, and neither has a caller that can
+ask a second time.
+
+`cmd/gui/tray.go`'s `requestUpdateCheck` is the only new untested line
+(`runtime.EventsEmit` needs a live Wails context), which is why the tray menu
+itself is the part pinned here and in `internal/ui`.
 
 ## Releases
 
@@ -331,9 +385,9 @@ Recommended local order before pushing:
 - Do NOT pass `-nopackage` to `wails build`. Wails only generates the `-res.syso` (which embeds `build/windows/icon.ico`, the application manifest and version info) when `options.Pack` is true; with `-nopackage` the exe is produced silently without any icon resource, so Explorer/taskbar show a generic icon. The `-nopackage` flag only matters for non-Windows packaging and is never needed here.
 - The project targets Go 1.26 in `go.mod`, but `.golangci.yml` sets `run.go: '1.25'` so the linter can actually start. Do not change this unless the linter version is also updated.
 - Exported identifiers must have doc comments (`revive` `exported` rule).
-- `npm run check` (svelte-check) currently reports 4 pre-existing type errors
-  and is not part of CI. Fix them before wiring it in, otherwise it is not a
-  usable gate.
+- `npm run check` (svelte-check) reports 2 pre-existing `autofocus` a11y
+  warnings and is not part of CI. It has no type errors, so it can be wired in
+  as a gate; fix or suppress the two warnings first.
 - Windows-only code uses `golang.org/x/sys/windows`, `syscall` lazy DLLs, and DPAPI. Cross-platform refactors need careful review.
 - Clipboard copies are published with the `CanIncludeInClipboardHistory`,
   `CanUploadToCloudClipboard` and `ExcludeClipboardContentFromMonitorProcessing`

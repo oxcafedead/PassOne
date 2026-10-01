@@ -4,6 +4,8 @@ import {ui} from '../models';
 
 export function AppInfo():Promise<Record<string, string>>;
 
+export function CheckForUpdates():Promise<ui.UpdateInfo>;
+
 export function ClipboardClearSeconds():Promise<number>;
 
 export function ClipboardHistoryEnabled():Promise<boolean>;

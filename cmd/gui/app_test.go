@@ -233,4 +233,13 @@ func TestAppPassThroughMethods(t *testing.T) {
 	if hosts := a.KnownHosts(); len(hosts) != 0 {
 		t.Fatalf("KnownHosts = %v", hosts)
 	}
+	// The tests build without a stamped version, so the check answers from that
+	// alone and makes no request: a test run must never reach api.github.com.
+	update, err := a.CheckForUpdates()
+	if err != nil {
+		t.Fatalf("CheckForUpdates: %v", err)
+	}
+	if update.Available {
+		t.Errorf("CheckForUpdates = %+v, want no update from a development build", update)
+	}
 }

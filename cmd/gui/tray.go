@@ -35,6 +35,7 @@ func trayReady() {
 
 	openItem := systray.AddMenuItem("Open PassOne", "Show the PassOne window")
 	lockItem := systray.AddMenuItem("Lock", "Drop keys from memory")
+	updateItem := systray.AddMenuItem("Check for updates", "Ask GitHub for a newer PassOne release")
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit PassOne", "Exit PassOne")
 
@@ -49,6 +50,8 @@ func trayReady() {
 				if appBinding != nil {
 					appBinding.Lock()
 				}
+			case <-updateItem.ClickedCh:
+				requestUpdateCheck()
 			case <-quitItem.ClickedCh:
 				requestQuit()
 				if ctx := globalCtx(); ctx != nil {
@@ -58,6 +61,29 @@ func trayReady() {
 			}
 		}
 	}()
+}
+
+// requestUpdateCheck asks the frontend to run an update check, bringing the
+// window up first so the answer is visible when PassOne was sitting in the tray.
+//
+// The tray asks rather than calling the checker itself so that one place
+// decides what a check says and one toast says it: the frontend already runs the
+// same check silently at startup, and it is the only thing that knows how to put
+// a message on screen.
+//
+// The ask travels as an event, so it lands only if the page is already
+// listening. That leaves one window — a tray click in the moments before the
+// page has mounted — where the request is dropped, and the startup check that
+// follows the page load is what answers instead. It answers when there is
+// something to report, so the one case that goes quiet is a manual check of a
+// current build in the first second after launch.
+func requestUpdateCheck() {
+	ctx := globalCtx()
+	if ctx == nil {
+		return
+	}
+	runtime.WindowShow(ctx)
+	runtime.EventsEmit(ctx, "passone:check-updates", nil)
 }
 
 func trayExit() {
