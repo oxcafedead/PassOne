@@ -1673,23 +1673,34 @@
 
     <section class="flex min-w-0 flex-1 flex-col gap-3 p-4">
       {#if selected}
-        <header class="flex items-center gap-3">
-          <h2 class="text-main min-w-0 truncate font-mono text-sm font-medium">{selected}</h2>
-          <span class="flex-1"></span>
+        <!--
+          One wrapping row for the entry's actions, and every item in it refuses
+          to shrink. The row used to be a single line, which only fitted because
+          an entry with neither a TOTP seed nor a login has five buttons: the two
+          extra ones appear for most real logins, and a flex item cannot shrink
+          below its own label, so the row grew past the window, the page became
+          scrollable sideways, and no amount of resizing fixed a TOTP entry
+          (GH #41). Wrapping turns that overflow into a second line instead.
+          The heading takes a line of its own and truncates, so a long path
+          shortens rather than competing with the buttons for the width — and
+          the row no longer needs the flex-1 spacer that used to hold them right.
+        -->
+        <header class="flex flex-wrap items-center gap-2">
+          <h2 class="text-main min-w-0 basis-full truncate font-mono text-sm font-medium">{selected}</h2>
           {#if copiedUsernameName === selected}
-            <span class="badge-success rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>Username · clears in {copiedUsernameRemaining}s</span>
+            <span class="badge-success shrink-0 whitespace-nowrap rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>Username · clears in {copiedUsernameRemaining}s</span>
           {/if}
           {#if copiedName === selected}
-            <span class="badge-success rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>Copied · clears in {copiedRemaining}s</span>
+            <span class="badge-success shrink-0 whitespace-nowrap rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>Copied · clears in {copiedRemaining}s</span>
           {/if}
           {#if copiedTOTPName === selected}
-            <span class="badge-success rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>TOTP · clears in {copiedTOTPRemaining}s</span>
+            <span class="badge-success shrink-0 whitespace-nowrap rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>TOTP · clears in {copiedTOTPRemaining}s</span>
           {/if}
           <button
             data-testid="reveal"
             on:click={revealed ? hide : reveal}
             title={revealed ? 'Drop the clear-text from the page' : 'Decrypt and show this entry'}
-            class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+            class="btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium"
           >
             {revealed ? 'Hide' : 'Show'}
           </button>
@@ -1697,7 +1708,7 @@
             on:click={() => copySecret(selected)}
             disabled={copying}
             title="Copy the first line to the clipboard"
-            class="btn-accent flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+            class="btn-accent flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium"
           >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
@@ -1709,7 +1720,7 @@
               on:click={() => copyTOTPCode(selected)}
               disabled={copyingTOTP}
               title="Copy the current TOTP code"
-              class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+              class="btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium"
             >
               <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -1722,7 +1733,7 @@
               on:click={() => copyUsername(selected)}
               disabled={copyingUsername}
               title={'Copy the login: ' + (username || 'no login')}
-              class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+              class="btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium"
             >
               <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
@@ -1733,7 +1744,7 @@
           <button
             on:click={openEdit}
             title="Edit this entry"
-            class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+            class="btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium"
           >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
@@ -1744,7 +1755,7 @@
             data-testid="move"
             on:click={openMove}
             title="Rename this entry, or move it into another folder by changing its path"
-            class="btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+            class="btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium"
           >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1zm8-8a1 1 0 00-1-1h-6a1 1 0 00-1 1v10a1 1 0 001 1h6a1 1 0 001-1V8z"/>
@@ -1754,7 +1765,7 @@
           <button
             on:click={toggleDeleteArm}
             title="Delete this entry (asks twice)"
-            class={'btn-ghost flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ' + (armDelete ? 'text-danger' : '')}
+            class={'btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium ' + (armDelete ? 'text-danger' : '')}
           >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>

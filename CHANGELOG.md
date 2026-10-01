@@ -53,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No more horizontal scrollbar on an entry that has a TOTP (GH #41).** The
+  selected entry's actions shared one fixed line, and two of them — **TOTP** and
+  **Username** — only appear for entries that carry a seed or a login. A flex item
+  cannot shrink below its own label, so an entry with both grew the row past the
+  window: the page became scrollable sideways, the scrollbar cut the detail pane
+  off, and no width fixed it, because the row wanted more than the screen had.
+  The row now wraps and nothing in it shrinks, so the tail drops onto a second
+  line instead, and the entry path takes a line of its own and truncates rather
+  than competing with the buttons. The default window is 1020px wide, where all
+  seven buttons still fit on one line beside the sidebar; the window still
+  resizes down to 720px, and a narrow window wraps instead of overflowing.
+
 - **Opening Edit no longer hides an entry's notes, so an edit cannot silently
   drop them (GH #39).** The dialog opened with an empty notes box and an empty
   password box, which is the one state that cannot distinguish "the notes I

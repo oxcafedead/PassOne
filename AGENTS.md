@@ -207,6 +207,32 @@ Notes for anyone touching the policy:
   dynamic markup, prefer building nodes with `textContent`/`createElement` over
   `innerHTML`; both are refused by `tools/checkui`.
 
+### The entry's action row wraps, and nothing in it shrinks (GH #41)
+
+The header above the detail pane is one `flex flex-wrap` row holding the entry
+path, the copy-countdown badges and up to seven actions (Show, Copy, TOTP,
+Username, Edit, Move, Delete). Two properties are load-bearing, not stylistic:
+
+- **The row wraps and every item in it is `shrink-0` + `whitespace-nowrap`** —
+  the badges included, since three countdowns can be running at once. A flex
+  item cannot shrink below its own label, so a single-line row overflows the
+  page as soon as the two conditional actions appear — which is every entry with
+  a TOTP seed or a login, i.e. most of them. Overflowing content extends the
+  document's scrollable area, so the window grew a horizontal scrollbar that cut
+  the detail pane off, and it did not matter how wide the window was: the row
+  wanted more than the screen had. Two more buttons were not the trigger, a
+  non-wrapping row was.
+- **The heading is `basis-full min-w-0 truncate`**, so a long path takes a line
+  of its own and shortens instead of taking width from the buttons. It also
+  means no `flex-1` spacer is needed to hold the actions right.
+
+`describe('entry actions row')` in `cmd/gui/frontend/test/app.test.ts` pins all
+three. jsdom has no layout engine, so the test asserts the classes, not a
+measured width — which is the same reason the tree-indent assertions are class
+assertions. Add a case there if a new action appears in that row, and re-run the
+width arithmetic for the default `Width:` in `cmd/gui/main.go` (1020 fits all
+seven beside the `w-72` sidebar; `MinWidth` stays at 720 and relies on the wrap).
+
 ### Bridge-contract gate (`cmd/gui/binding_contract_test.go`)
 
 `cmd/gui` is the only package holding Wails-bound methods, and a rename there

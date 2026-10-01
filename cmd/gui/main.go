@@ -72,9 +72,12 @@ func main() {
 	}
 
 	if err := wails.Run(&options.App{
-		Title:             "PassOne",
-		Width:             900,
-		Height:            620,
+		Title:  "PassOne",
+		Width:  1020,
+		Height: 620,
+		// The entry actions wrap instead of overflowing the page (GH #41), so
+		// this is only where the seven buttons of a TOTP entry fit on one line
+		// beside the 18rem sidebar, not a floor: the window still shrinks.
 		MinWidth:          720,
 		MinHeight:         480,
 		HideWindowOnClose: true,

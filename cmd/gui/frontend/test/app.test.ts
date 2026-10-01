@@ -355,6 +355,58 @@ describe('entry detail', () => {
   })
 })
 
+describe('entry actions row', () => {
+  // GH #41. TOTP and Username exist only for entries that carry a seed or a
+  // login, and the header laid every action out on one fixed line. A flex item
+  // cannot shrink below its own label, so as soon as both buttons showed up the
+  // row grew past the window and the page scrolled sideways — and no window
+  // width fixed it for an entry with a TOTP, because the row wanted more than
+  // the screen had.
+  //
+  // jsdom has no layout engine, so a measured width cannot be asserted here; the
+  // assertions are on the mechanism instead. A single-line row, a button allowed
+  // to shrink (or to wrap its label onto two lines), and a heading sharing the
+  // buttons' line each bring the overflow back, so each one is pinned.
+  it('wraps the actions instead of widening the page when TOTP and Username show up', async () => {
+    HasTOTP.mockResolvedValue(true)
+    Username.mockResolvedValue('octocat')
+    vault()
+    render(App)
+    await selectEntry()
+    await screen.findByRole('button', {name: 'TOTP'})
+    await screen.findByRole('button', {name: 'Username'})
+
+    const heading = screen.getByRole('heading', {level: 2, name: 'github/personal'})
+    const header = heading.closest('header')
+    if (!header) {
+      throw new Error('the entry actions are not in a header')
+    }
+    // Every action shares the one row, the two the entry earned by carrying a
+    // seed and a login included.
+    const actions = within(header).getAllByRole('button')
+    expect(actions.map((b) => b.textContent?.trim())).toEqual([
+      'Show',
+      'Copy',
+      'TOTP',
+      'Username',
+      'Edit',
+      'Move',
+      'Delete',
+    ])
+    expect(header.className).toContain('flex-wrap')
+    for (const button of actions) {
+      expect(button.className).toContain('shrink-0')
+      expect(button.className).toContain('whitespace-nowrap')
+      expect(button.getAttribute('style')).toBeNull()
+    }
+    // The path takes a line of its own and gives up characters instead of width,
+    // so a deep entry cannot be what pushes the buttons off screen either.
+    for (const wanted of ['basis-full', 'min-w-0', 'truncate']) {
+      expect(heading.className).toContain(wanted)
+    }
+  })
+})
+
 describe('edit', () => {
   it('opens with the entry notes already in the box', async () => {
     vault()
