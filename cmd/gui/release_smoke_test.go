@@ -952,6 +952,29 @@ func TestReleaseSmokeSettingsPersistAcrossRestart(t *testing.T) {
 	})
 }
 
+// TestReleaseSmokeDisabledAutoLockSurvivesRestart is GH #42 at the bridge
+// boundary. "0 = never" is what the settings form offers, so the App the
+// renderer talks to has to keep reporting the auto-lock as off after the process
+// that saved it is gone, not quietly hand back the 5-minute default.
+func TestReleaseSmokeDisabledAutoLockSurvivesRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	v := newSmokeApp(t, dataDir)
+	if err := v.SetAutoLock(0); err != nil {
+		t.Fatalf("SetAutoLock(0): %v", err)
+	}
+	if got := v.AppInfo()["autoLock"]; got != "off" {
+		t.Fatalf("AppInfo autoLock = %q, want off", got)
+	}
+
+	restarted := newSmokeApp(t, dataDir)
+	if got := restarted.CurrentSettings().AutoLockMinutes; got != 0 {
+		t.Errorf("AutoLockMinutes after restart = %d, want 0 (auto-lock disabled)", got)
+	}
+	if got := restarted.AppInfo()["autoLock"]; got != "off" {
+		t.Errorf("AppInfo autoLock after restart = %q, want off", got)
+	}
+}
+
 // TestReleaseSmokeLockRefusesProtectedCalls confirms the lock boundary the UI
 // depends on: after locking, every entry operation fails instead of silently
 // returning empty data.

@@ -204,6 +204,37 @@ func TestCurrentSettings(t *testing.T) {
 	}
 }
 
+// TestDisabledAutoLockSurvivesARestart is the journey behind GH #42: the GUI
+// offers "0 = never", SetAutoLock stores it, and the next process reads the
+// settings back off disk. Treating that stored 0 as a value that had never been
+// set put the 5-minute default back, so the setting survived the save that
+// turned it off and reverted on the restart after it.
+func TestDisabledAutoLockSurvivesARestart(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("PASSONE_DIR", dataDir)
+	first, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := first.SetAutoLock(0); err != nil {
+		t.Fatalf("SetAutoLock(0): %v", err)
+	}
+	if got := first.AutoLockMinutes(); got != 0 {
+		t.Fatalf("AutoLockMinutes = %d, want 0", got)
+	}
+
+	restarted, err := New()
+	if err != nil {
+		t.Fatalf("New after restart: %v", err)
+	}
+	if got := restarted.AutoLockMinutes(); got != 0 {
+		t.Fatalf("AutoLockMinutes after restart = %d, want 0 (auto-lock disabled)", got)
+	}
+	if got := restarted.CurrentSettings().AutoLockMinutes; got != 0 {
+		t.Fatalf("CurrentSettings AutoLockMinutes after restart = %d, want 0", got)
+	}
+}
+
 func TestCreatePasswordValidation(t *testing.T) {
 	g := newTestGUI(t)
 	if _, err := g.CreatePassword("", "pass", "pass", ""); err == nil {

@@ -53,6 +53,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Auto-lock set to 0 no longer reverts to 5 minutes (GH #42).** The settings
+  form offers `0 = never` and `SetAutoLock` documents 0 as disabling the idle
+  timer, but loading the configuration repaired `AutoLockMinutes <= 0` to the
+  5-minute default — the repair that guards a corrupt file also threw away the
+  one value the user had chosen on purpose. The setting took effect, saved as
+  `0`, and came back as 5 on the next start, so "never" was unreachable in
+  practice. Only a **negative** timeout is repaired now; a config file that
+  never mentions the setting still gets the default, because the file is decoded
+  onto the defaults before the check. The clipboard delay is unchanged: there 0
+  is genuinely invalid (`SetClipboardClear` refuses under a second).
+
+  Turning the auto-lock off also has to stay a deliberate act. Svelte binds an
+  emptied `<input type="number">` to `null`, which the bridge turns into the same
+  `0` Go cannot tell from a chosen one, so saving a cleared field would have
+  silently disarmed the idle lock; the form now refuses that save and says what
+  the field expects, and the settings placeholder is the app's default rather
+  than 0 so a failed settings read cannot submit "never" either.
+
 - **No more horizontal scrollbar on an entry that has a TOTP (GH #41).** The
   selected entry's actions shared one fixed line, and two of them — **TOTP** and
   **Username** — only appear for entries that carry a seed or a login. A flex item

@@ -36,10 +36,20 @@ type Paths struct {
 	SSHKeyFile     string
 }
 
+// Defaults for the settings a user has never chosen. They are named because
+// Load has to fall back to them, and because AutoLockMinutes is the one setting
+// where 0 is a value the user can legitimately pick: "never auto-lock" cannot be
+// told apart from "not configured" by looking at the number alone, so the default
+// has to be established before the file is decoded rather than after it.
+const (
+	defaultAutoLockMinutes       = 5
+	defaultClipboardClearSeconds = 30
+)
+
 func defaultConfig() *Config {
 	return &Config{
-		AutoLockMinutes:       5,
-		ClipboardClearSeconds: 30,
+		AutoLockMinutes:       defaultAutoLockMinutes,
+		ClipboardClearSeconds: defaultClipboardClearSeconds,
 		GitAuthorName:         "PassOne",
 		UsernameSource:        username.DefaultMode,
 	}
@@ -118,11 +128,19 @@ func (m *Manager) Load() (*Config, error) {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
-	if cfg.AutoLockMinutes <= 0 {
-		cfg.AutoLockMinutes = 5
+	// Only a negative timeout is repaired. 0 is the user's deliberate "never
+	// auto-lock" — SetAutoLock documents it as disabling the timer and the GUI
+	// offers it as "0 = never" — so rewriting it here put the setting back to 5
+	// minutes on the next start, which is the one value it cannot disagree with:
+	// the user asked for no timeout at all. A missing key keeps the default,
+	// because the unmarshal above overlays the file onto defaultConfig.
+	if cfg.AutoLockMinutes < 0 {
+		cfg.AutoLockMinutes = defaultAutoLockMinutes
 	}
+	// The clipboard delay has no such reserved value: SetClipboardClear refuses
+	// anything under a second, so 0 or less in the file is corrupt either way.
 	if cfg.ClipboardClearSeconds <= 0 {
-		cfg.ClipboardClearSeconds = 30
+		cfg.ClipboardClearSeconds = defaultClipboardClearSeconds
 	}
 	cfg.UsernameSource = username.Normalize(cfg.UsernameSource)
 	return cfg, nil

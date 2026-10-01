@@ -71,7 +71,7 @@ func (c *Config) ReString() string {
 
 func TestManagerFixesBadDefaults(t *testing.T) {
 	paths := PathsFromBase(t.TempDir())
-	if err := os.WriteFile(paths.ConfigFile, []byte(`{"autoLockMinutes":0,"clipboardClearSeconds":-1,"usernameSource":"bogus"}`), 0o600); err != nil {
+	if err := os.WriteFile(paths.ConfigFile, []byte(`{"autoLockMinutes":-1,"clipboardClearSeconds":-1,"usernameSource":"bogus"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m := NewManager(paths)
@@ -84,6 +84,43 @@ func TestManagerFixesBadDefaults(t *testing.T) {
 	}
 	if cfg.UsernameSource != "auto" {
 		t.Fatalf("bad usernameSource not repaired: %+v", cfg)
+	}
+}
+
+// TestManagerKeepsDisabledAutoLock pins that a stored 0 is a setting rather than
+// a missing value. "Never auto-lock" is what SetAutoLock documents 0 as and
+// what the GUI offers as "0 = never", so Load repaired it to the 5-minute
+// default and the setting reverted to a timeout the user had explicitly turned
+// off (GH #42).
+func TestManagerKeepsDisabledAutoLock(t *testing.T) {
+	paths := PathsFromBase(t.TempDir())
+	m := NewManager(paths)
+	if err := m.Save(&Config{AutoLockMinutes: 0, ClipboardClearSeconds: 30}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg, err := m.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AutoLockMinutes != 0 {
+		t.Fatalf("AutoLockMinutes = %d, want 0 (auto-lock disabled)", cfg.AutoLockMinutes)
+	}
+}
+
+// TestManagerMissingAutoLockKeyTakesTheDefault is the other half: 0 may mean
+// "never", but a config file that never mentions the setting still has to get
+// the default rather than an unarmed auto-lock.
+func TestManagerMissingAutoLockKeyTakesTheDefault(t *testing.T) {
+	paths := PathsFromBase(t.TempDir())
+	if err := os.WriteFile(paths.ConfigFile, []byte(`{"gitRemote":"git@github.com:user/pass.git"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := NewManager(paths).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AutoLockMinutes != defaultAutoLockMinutes {
+		t.Fatalf("AutoLockMinutes = %d, want %d", cfg.AutoLockMinutes, defaultAutoLockMinutes)
 	}
 }
 

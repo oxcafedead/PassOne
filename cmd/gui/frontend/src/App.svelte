@@ -177,13 +177,17 @@
 
   // Settings / onboarding screen state.
   let settingsOpen: boolean = false
+  // The placeholder is the app's own default, not 0: it is what a save would
+  // submit if loadSettings ever failed, and 0 there would silently turn the
+  // idle auto-lock off rather than leaving it on the default the user has
+  // never actually chosen.
   let sw: SettingsInfo = {
     dataDir: '',
     storePath: '',
     gitRemote: '',
     pgpKeyFingerprint: '',
     sshKeyId: '',
-    autoLockMinutes: 0,
+    autoLockMinutes: 5,
     clipboardClearSeconds: 30,
     gitAuthorName: '',
     gitAuthorEmail: '',
@@ -1144,6 +1148,15 @@
   }
 
   async function savePrefs(): Promise<void> {
+    // A cleared number input binds null, and the bridge turns that into the 0
+    // the Go side cannot distinguish from a deliberate 0 — which here means
+    // "never auto-lock". Refuse the save instead of letting a stray backspace
+    // disarm the idle lock, and say what the field wants instead.
+    if (!Number.isInteger(sw.autoLockMinutes) || sw.autoLockMinutes < 0) {
+      setupErr = 'Auto-lock must be a whole number of minutes (0 to disable it)'
+      flash(setupErr, true)
+      return
+    }
     prefsBusy = true
     setupErr = ''
     try {

@@ -17,10 +17,13 @@ const {
   GeneratePGPKey,
   HasTOTP,
   IsUnlocked,
+  KnownHosts,
   ListPasswords,
   MovePassword,
   RemovePassword,
   RevealPath,
+  SetAutoLock,
+  SetClipboardClear,
   ShowNotes,
   ShowPassword,
   Unlock,
@@ -855,6 +858,55 @@ describe('auto-lock', () => {
     await waitFor(() => expect(screen.queryByTestId('detail')).not.toBeInTheDocument())
     expect(screen.getByLabelText('Lock password')).toBeInTheDocument()
     expect(locationValue('Data dir')).toBeInTheDocument()
+  })
+
+  // GH #42. "0 = never" is what the form offers, so the save has to put that 0
+  // in front of the backend instead of dropping it, and a field the user merely
+  // cleared is not a request to turn the idle lock off. Svelte binds an empty
+  // number input to null and the bridge turns that into the same 0 the Go side
+  // cannot tell from a deliberate one, so the form has to refuse the save rather
+  // than arm nothing on a stray backspace.
+  describe('preference', () => {
+    const field = 'Auto-lock after (minutes, 0 = never)'
+
+    // The gear lives in the unlocked sidebar, so wait for the unlocked layout
+    // rather than clicking into the lock screen that is still on its way out.
+    // openSettings opens the modal without awaiting loadSettings, and that load
+    // replaces sw wholesale, so anything typed into the first copy of the form is
+    // discarded and the save would submit the stored value instead. The trusted
+    // host count is the last of that load's calls to reach the DOM outside the
+    // wizard, so its row appearing is the signal that the load has landed.
+    async function openPrefs(): Promise<void> {
+      KnownHosts.mockResolvedValue(['github.com'])
+      await fireEvent.click(await screen.findByTitle('Setup / settings'))
+      await screen.findByText('1 host(s) trusted')
+      await screen.findByRole('button', {name: 'Save preferences'})
+      expect(screen.getByLabelText(field)).toHaveValue(settingsDefaults.autoLockMinutes)
+    }
+
+    it('sends 0 to the backend, so "never" is what gets stored', async () => {
+      vault()
+      render(App)
+      await openPrefs()
+
+      await type(field, '0')
+      await fireEvent.click(screen.getByRole('button', {name: 'Save preferences'}))
+
+      await waitFor(() => expect(SetAutoLock).toHaveBeenCalledWith(0))
+    })
+
+    it('refuses a cleared field rather than reading it as "never"', async () => {
+      vault()
+      render(App)
+      await openPrefs()
+
+      await type(field, '')
+      await fireEvent.click(screen.getByRole('button', {name: 'Save preferences'}))
+
+      expect(await screen.findByText(/whole number of minutes/)).toBeInTheDocument()
+      expect(SetAutoLock).not.toHaveBeenCalled()
+      expect(SetClipboardClear).not.toHaveBeenCalled()
+    })
   })
 })
 
