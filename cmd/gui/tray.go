@@ -2,20 +2,49 @@ package main
 
 import (
 	"context"
+	"sync"
 
 	"github.com/getlantern/systray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 var (
-	appCtx        context.Context
-	appBinding    *App
+	// appMu guards the two values below. Wails writes them from its own
+	// callbacks and the tray reads them from the menu goroutine, so the nil
+	// checks that follow are only a real guard if the pair is copied out
+	// atomically — a context.Context is two words, and a torn read of it is a
+	// type pointer paired with someone else's data pointer.
+	appMu      sync.RWMutex
+	appCtx     context.Context
+	appBinding *App
+
 	quitRequested = make(chan struct{})
 )
 
-func setAppContext(ctx context.Context) { appCtx = ctx }
+func setAppContext(ctx context.Context) {
+	appMu.Lock()
+	appCtx = ctx
+	appMu.Unlock()
+}
 
-func globalCtx() context.Context { return appCtx }
+func globalCtx() context.Context {
+	appMu.RLock()
+	defer appMu.RUnlock()
+	return appCtx
+}
+
+func setAppBinding(a *App) {
+	appMu.Lock()
+	appBinding = a
+	appMu.Unlock()
+}
+
+// trayApp returns the bound App, or nil before the bindings exist.
+func trayApp() *App {
+	appMu.RLock()
+	defer appMu.RUnlock()
+	return appBinding
+}
 
 // requestQuit records that the user asked to quit exactly once. The main
 // goroutine watches it so it can force a clean process exit even if Wails or
@@ -47,8 +76,8 @@ func trayReady() {
 					runtime.WindowShow(ctx)
 				}
 			case <-lockItem.ClickedCh:
-				if appBinding != nil {
-					appBinding.Lock()
+				if a := trayApp(); a != nil {
+					a.Lock()
 				}
 			case <-updateItem.ClickedCh:
 				requestUpdateCheck()

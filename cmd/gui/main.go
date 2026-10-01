@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/getlantern/golog"
-	"github.com/getlantern/systray"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -39,7 +38,7 @@ func main() {
 		log.Fatalf("PassOne: %v", err)
 	}
 	bindApp := NewApp(gui)
-	appBinding = bindApp
+	setAppBinding(bindApp)
 
 	// systray logs through upper-level getlantern/golog, whose error output
 	// defaults to os.Stderr (invisible in a GUI app). Mirror it into our data
@@ -49,12 +48,14 @@ func main() {
 	}
 
 	// systray runs on its own goroutine; Wails must run on the main goroutine
-	// on Windows or the window is created hidden.
-	systrayDone := make(chan struct{})
-	go func() {
-		defer close(systrayDone)
-		systray.Run(trayReady, trayExit)
-	}()
+	// on Windows or the window is created hidden. runTray pins that goroutine
+	// to its OS thread, which is what keeps the tray icon's menu working at all
+	// — see its doc comment and GH #14.
+	systrayDone := runTray(trayReady, trayExit)
+
+	// The tray is the only way out of this process, so a tray loop that stops
+	// early would leave an app that cannot be closed. Say so and exit.
+	go watchTray(systrayDone, quitRequested, os.Exit)
 
 	// Watchdog: once Quit is requested, Wails must tear the webview down and
 	// let the main goroutine return. If that hangs, force a clean exit so the
@@ -113,8 +114,7 @@ func main() {
 	}
 
 	// Wails app ended: tear down the tray (idempotent if already quitting).
-	systray.Quit()
-	<-systrayDone
+	stopTray(systrayDone)
 }
 
 // windowsUsesLightTheme reports the Windows light/dark app theme from the

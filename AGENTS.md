@@ -357,6 +357,57 @@ ask a second time.
 (`runtime.EventsEmit` needs a live Wails context), which is why the tray menu
 itself is the part pinned here and in `internal/ui`.
 
+### The tray goroutine is pinned to one OS thread (GH #14)
+
+`runTray` in `cmd/gui/tray_loop.go` calls `runtime.LockOSThread` before
+`systray.Run` and does not drop it until the loop returns. That is not
+bookkeeping, it is the only thing keeping the tray icon's menu working:
+
+- **systray's window is serviced by a thread queue.** It creates a hidden
+  window and pumps it with `GetMessageW(hWnd = 0)`, which drains **the calling
+  thread's** queue and nothing else. The window and the pump therefore have to
+  stay on one thread, or the `WM_COMMAND` and the icon's callback message are
+  posted to a queue nobody is reading.
+- **systray's own pin is on the wrong thread for us.** Its package `init` calls
+  `runtime.LockOSThread`, which pins whichever thread initialisation ran on —
+  the main thread. Wails needs the main thread on Windows, which is exactly why
+  the loop has to be on a goroutine of its own. A bare `go systray.Run(...)`
+  therefore satisfies Wails and abandons systray's assumption silently.
+
+The symptom when the pin is missing is not a crash, it is a quiet degradation,
+which is what made this worth an issue rather than a stack trace (GH #14): the
+icon stays drawn, left and right clicks stop doing anything after an
+unpredictable amount of time, and since the tray holds the only **Quit
+PassOne** item the process can then only be ended from Task Manager. Upstream
+tracked the identical report at getlantern/systray#149, #161 and #269 (closed by
+#281) and landed on the same fix.
+
+Two things follow, and each is a test:
+
+- **`TestRunTrayPinsItsGoroutineToOneOSThread`** substitutes a loop that samples
+  `windows.GetCurrentThreadId()` either side of a yield storm and requires it to
+  be unchanged. The positive direction cannot flake (`LockOSThread` guarantees
+  it) and the negative one has real teeth: with the pin deleted it fails about
+  four runs in five, because a goroutine that blocks hands its thread back to
+  the scheduler. It runs against the `systrayRun` seam, so restoring the seam
+  matters.
+- **A tray loop that stops is never survivable, so `watchTray` ends the
+  process.** The tray owns the process lifetime by design — `HideWindowOnClose`
+  means closing the window only hides it, and every exit goes through the tray's
+  Quit item, which closes `quitRequested` *before* `runtime.Quit`. A loop that
+  stops for any other reason leaves an app with no way to close it that also
+  keeps holding the single-instance mutex, so the next launch is turned away and
+  finds nothing to show. Hence `classifyTrayStop`: a stop with no quit requested
+  is a fault and exits `1`, and a stop during a quit is ordinary teardown that
+  `main` drains itself. The only account of an exit can be `passone.log`, which
+  is why `guiLog` goes through the `golog` outputs `main.go` sets up — nothing in
+  the UI could report it, the UI being unreachable by definition at that point.
+
+`appCtx` and `appBinding` are written by Wails callbacks and read by the tray
+menu goroutine, so they are behind `appMu`. The `ctx != nil` / `a != nil` checks
+read as guards but are not one without it: `context.Context` is two words, and a
+torn read pairs a type pointer with another value's data pointer.
+
 ## Releases
 
 - Versioning is SemVer; releases are tagged `vMAJOR.MINOR.PATCH` on `main`.

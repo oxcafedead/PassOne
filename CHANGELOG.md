@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.2.0] - 2026-10-01
+
 ### Added
 
 - **Tell a stale build that a newer PassOne exists (GH #31).** There was no way
@@ -80,6 +82,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written.
 
 ### Fixed
+
+- **The tray menu no longer goes dead and strands the app (GH #14).** After the
+  app had been open a while, right-clicking the tray icon stopped doing
+  anything, and because the tray holds the only **Quit PassOne** item — closing
+  the window only hides it — the process then had to be ended from Task
+  Manager. The icon was still drawn the whole time, so it looked alive.
+
+  Two things were wrong. systray services its hidden window with a
+  `GetMessageW` loop that only ever drains the **calling thread's** message
+  queue, and it pins whichever thread its package `init` ran on — the main
+  thread, which Wails requires for itself, which is why the loop cannot run
+  there. Moving the loop onto its own goroutine satisfied Wails and quietly
+  dropped that guarantee, so the window and the pump reading its messages were
+  free to end up on different threads and the menu stopped arriving. The
+  goroutine is now pinned to its OS thread, which is the fix upstream settled on
+  for the identical report (getlantern/systray#149, #161, #269).
+
+  The second is why this was a dead end rather than an annoyance. Nothing
+  supervised the loop, so any early exit from it left a process that could not
+  be closed and kept holding the single-instance mutex — the next launch was
+  turned away and found nothing to show. If the loop ever stops while PassOne
+  was still meant to be running, the app now says why in `passone.log` and
+  exits rather than lingering with a tray icon that does nothing. A tray loop
+  stopping as part of a quit is left alone, so an ordinary shutdown still
+  unwinds through Wails.
 
 - **Auto-lock set to 0 no longer reverts to 5 minutes (GH #42).** The settings
   form offers `0 = never` and `SetAutoLock` documents 0 as disabling the idle
