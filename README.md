@@ -179,4 +179,4 @@ Issues and pull requests are welcome. Please run the test suite and linter befor
 
 ## License
 
-See the `LICENSE` file (to be added).
+See the `LICENSE` file.
