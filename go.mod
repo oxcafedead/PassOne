@@ -3,13 +3,13 @@ module github.com/oxcafedead/passone
 go 1.26.7
 
 require (
-	github.com/ProtonMail/go-crypto v1.5.0
+	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/getlantern/golog v0.0.0-20190830074920-4ef2e798c2d7
 	github.com/getlantern/systray v1.2.2
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/wailsapp/wails/v2 v2.16.0
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.58.0
+	golang.org/x/net v0.59.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 )
