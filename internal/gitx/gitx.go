@@ -422,12 +422,100 @@ func Pull(dir string, auth transport.AuthMethod) error {
 		case errors.Is(err, transport.ErrEmptyRemoteRepository):
 			return ErrRemoteEmpty
 		case errors.Is(err, goGit.ErrNonFastForwardUpdate):
-			return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
+			head, herr := repo.Head()
+			if herr != nil {
+				return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
+			}
+			refName := head.Name()
+			if opts.ReferenceName != plumbing.HEAD && opts.ReferenceName != "" {
+				refName = opts.ReferenceName
+			}
+			remoteRef, rerr := repo.Reference(plumbing.NewRemoteReferenceName("origin", refName.Short()), true)
+			if rerr != nil {
+				return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
+			}
+			conflicts, cerr := hasConflicts(repo, head, remoteRef)
+			if cerr != nil || conflicts {
+				return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
+			}
+			if err := wt.Reset(&goGit.ResetOptions{Commit: remoteRef.Hash(), Mode: goGit.HardReset}); err != nil {
+				return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
+			}
+			return nil
 		default:
 			return fmt.Errorf("pull failed: %v", err)
 		}
 	}
 	return nil
+}
+
+func getChangeName(ch *object.Change) string {
+	if ch.From.Name != "" && ch.To.Name != "" {
+		if ch.From.Name == ch.To.Name {
+			return ch.From.Name
+		}
+		return ch.From.Name
+	}
+	if ch.From.Name != "" {
+		return ch.From.Name
+	}
+	if ch.To.Name != "" {
+		return ch.To.Name
+	}
+	return ""
+}
+
+func hasConflicts(repo *goGit.Repository, head, remoteRef *plumbing.Reference) (bool, error) {
+	headCommit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		return false, err
+	}
+	remoteCommit, err := repo.CommitObject(remoteRef.Hash())
+	if err != nil {
+		return false, err
+	}
+	baseCommits, err := headCommit.MergeBase(remoteCommit)
+	if err != nil {
+		return false, err
+	}
+	if len(baseCommits) == 0 {
+		return true, nil
+	}
+	baseCommit := baseCommits[0]
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return false, err
+	}
+	headTree, err := headCommit.Tree()
+	if err != nil {
+		return false, err
+	}
+	remoteTree, err := remoteCommit.Tree()
+	if err != nil {
+		return false, err
+	}
+	changesHead, err := object.DiffTree(baseTree, headTree)
+	if err != nil {
+		return false, err
+	}
+	changesRemote, err := object.DiffTree(baseTree, remoteTree)
+	if err != nil {
+		return false, err
+	}
+	headModified := make(map[string]bool)
+	for _, ch := range changesHead {
+		name := getChangeName(ch)
+		if name != "" {
+			headModified[name] = true
+		}
+	}
+	for _, ch := range changesRemote {
+		name := getChangeName(ch)
+		if name != "" && headModified[name] {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Add stages one or more paths in the worktree.
