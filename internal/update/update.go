@@ -183,33 +183,53 @@ func parseVersion(s string) (parsed, bool) {
 		p.pre = strings.Split(raw[i+1:], ".")
 		raw = raw[:i]
 	}
-	fields := strings.Split(raw, ".")
-	if len(fields) == 0 || len(fields) > 3 {
+	core, ok := parseCore(raw)
+	if !ok {
 		return parsed{}, false
 	}
-	p.core = make([]int, 3)
+	p.core = core
+	if !validPre(p.pre) {
+		return parsed{}, false
+	}
+	return p, true
+}
+
+// parseCore reads the one-to-three dot-separated numeric core components,
+// right-padding to three so "v1" and "v1.0.0" compare equal. Every way a field
+// can fail to be a core component is refused rather than repaired.
+func parseCore(raw string) ([]int, bool) {
+	fields := strings.Split(raw, ".")
+	if len(fields) > 3 {
+		return nil, false
+	}
+	core := make([]int, 3)
 	for i, f := range fields {
 		if f == "" || (len(f) > 1 && f[0] == '0') {
-			return parsed{}, false
+			return nil, false
 		}
 		n, err := strconv.Atoi(f)
 		if err != nil || n < 0 {
-			return parsed{}, false
+			return nil, false
 		}
-		p.core[i] = n
+		core[i] = n
 	}
-	for _, id := range p.pre {
+	return core, true
+}
+
+// validPre reports whether every pre-release identifier is one SemVer §9 allows.
+func validPre(pre []string) bool {
+	for _, id := range pre {
 		if id == "" {
-			return parsed{}, false
+			return false
 		}
 		// SemVer §9: a numeric identifier carries no leading zero, so "rc.01" is
 		// not a version. Left accepted it would read as rc.1 and compare against a
 		// build that was never tagged.
 		if n, isNum := numeric(id); isNum && len(n) > 1 && n[0] == '0' {
-			return parsed{}, false
+			return false
 		}
 	}
-	return p, true
+	return true
 }
 
 // compare orders two parsed versions: the numeric core first, then the

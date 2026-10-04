@@ -23,7 +23,7 @@ var ErrUnsupportedKey = errors.New("unsupported SSH key type: only Ed25519 and R
 // ImportPrivateKey parses an OpenSSH private key file (PEM or the OpenSSH
 // format), validating the passphrase when the key is encrypted. Unsupported
 // key types are rejected for v1.
-func ImportPrivateKey(pemBytes []byte, passphrase []byte) (*SSHKey, error) {
+func ImportPrivateKey(pemBytes, passphrase []byte) (*SSHKey, error) {
 	// Parse the raw key rather than calling ssh.ParsePrivateKey: the ssh.Signer
 	// interface hides the key it wraps and offers no accessor, so a key parsed
 	// that way could only ever be dereferenced, never wiped. The signer built

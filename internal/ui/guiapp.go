@@ -184,7 +184,7 @@ var openExplorer = func(arg string) error {
 	// the folder opens nowhere. The usual reason to set HideWindow, a console
 	// flashing in a GUI app, cannot happen here anyway -- explorer.exe is a
 	// GUI-subsystem binary and never allocates a console.
-	cmd := exec.Command("explorer.exe", arg)
+	cmd := exec.Command(explorerExe(), arg)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("could not open Windows Explorer: %w", err)
 	}
@@ -193,6 +193,28 @@ var openExplorer = func(arg string) error {
 	// one cannot hold this up.
 	go func() { _ = cmd.Wait() }()
 	return nil
+}
+
+// explorerExe returns the absolute path of explorer.exe.
+//
+// The bare name "explorer.exe" would be resolved by exec.LookPath, which walks
+// PATH -- so an explorer.exe sitting in a writable directory that happens to be
+// earlier on PATH would be started instead of the real one, with the app's own
+// directory as its argument. It is indirected for the same reason openExplorer
+// is: the resolution is the part worth asserting, and SystemRoot is the only
+// thing a test has to stand in for.
+var explorerExe = func() string {
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = os.Getenv("WINDIR")
+	}
+	if root == "" {
+		// Neither variable is set. A bare name still works on a normally
+		// configured machine, so degrade to the previous behaviour rather than
+		// refusing to reveal a directory at all.
+		return "explorer.exe"
+	}
+	return filepath.Join(root, "System32", "explorer.exe")
 }
 
 // ownPath resolves path and reports it only when it lies inside the

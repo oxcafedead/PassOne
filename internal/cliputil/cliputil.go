@@ -69,27 +69,30 @@ func Copied(text string, clearSeconds int) (Result, error) {
 // clearAfter waits for d, then removes sentinel from the clipboard.
 func clearAfter(sentinel string, d time.Duration) {
 	time.Sleep(d)
-	if err := clear(sentinel); err != nil {
+	if err := clearIfOurs(sentinel); err != nil {
 		warnf("%v", err)
 	}
 }
 
-// readClipboard reads the clipboard for clear, and wipeClipboard is the wipe it
-// falls back to. Both are indirected so a test can inject an unreadable or
-// unwipeable clipboard and assert what happens then.
+// readClipboard reads the clipboard for clearIfOurs, and wipeClipboard is the
+// wipe it falls back to. Both are indirected so a test can inject an unreadable
+// or unwipeable clipboard and assert what happens then.
 var (
 	readClipboard = readText
 	wipeClipboard = wipe
 )
 
-// clear removes sentinel from the clipboard.
+// clearIfOurs removes sentinel from the clipboard, but only if the clipboard
+// still holds it. It is not named clear because Go 1.21 gave the language a
+// builtin of that name, and a package-level func shadowing a builtin is the
+// kind of accident that reads as deliberate long after it stops being one.
 //
 // It leaves the clipboard alone when it holds anything else, so a value the
 // user copied after this one survives. When the clipboard cannot be read at all
 // it fails closed: an unreadable clipboard is not evidence that the user moved
 // on, and a secret left behind is the worse outcome, so it wipes unconditionally
 // and says that is what happened.
-func clear(sentinel string) error {
+func clearIfOurs(sentinel string) error {
 	cur, err := readClipboard(readAttempts, openRetryDelay)
 	if err != nil {
 		if werr := wipeClipboard(); werr != nil {

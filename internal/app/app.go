@@ -1303,23 +1303,25 @@ func (a *App) Sync() (string, error) {
 	}
 	auth := a.sshAuth()
 
+	var (
+		remoteEmpty bool
+		fetched     bool
+		pulled      bool
+		pushed      bool
+	)
 	// A remote that holds no refs yet is the state a store created here is in
 	// before its first push: there is nothing to fetch or pull, and that is not
 	// a failure. Push still runs and creates the branch.
-	remoteEmpty := false
-	fetched := false
 	fetchErr := gitx.Fetch(root, auth)
-	if fetchErr != nil {
-		if errors.Is(fetchErr, gitx.ErrRemoteEmpty) {
-			remoteEmpty = true
-		} else if !errors.Is(fetchErr, gitx.ErrUpToDate) {
-			return "", fetchErr
-		}
-	} else {
+	switch {
+	case fetchErr == nil:
 		fetched = true
+	case errors.Is(fetchErr, gitx.ErrRemoteEmpty):
+		remoteEmpty = true
+	case !errors.Is(fetchErr, gitx.ErrUpToDate):
+		return "", fetchErr
 	}
 
-	pulled := false
 	if !remoteEmpty {
 		pullErr := gitx.Pull(root, auth)
 		switch {
@@ -1334,20 +1336,23 @@ func (a *App) Sync() (string, error) {
 		}
 	}
 
-	pushed := false
-	pushErr := gitx.Push(root, auth)
-	if pushErr != nil {
-		if !errors.Is(pushErr, gitx.ErrUpToDate) {
-			return "", pushErr
-		}
-	} else {
+	switch pushErr := gitx.Push(root, auth); {
+	case pushErr == nil:
 		pushed = true
+	case !errors.Is(pushErr, gitx.ErrUpToDate):
+		return "", pushErr
 	}
 
+	return syncSummary(fetched, pulled, pushed), nil
+}
+
+// syncSummary names the steps that actually moved something. It is separate from
+// Sync so that the three "did it do anything" questions are asked in one place
+// rather than at each step.
+func syncSummary(fetched, pulled, pushed bool) string {
 	if !fetched && !pulled && !pushed {
-		return "Already up to date with origin.", nil
+		return "Already up to date with origin."
 	}
-
 	parts := make([]string, 0, 3)
 	if fetched {
 		parts = append(parts, "fetched remote updates")
@@ -1358,7 +1363,7 @@ func (a *App) Sync() (string, error) {
 	if pushed {
 		parts = append(parts, "pushed local commits")
 	}
-	return "Synced: " + strings.Join(parts, ", ") + ".", nil
+	return "Synced: " + strings.Join(parts, ", ") + "."
 }
 
 // Status returns a human-readable summary of the repository state.
@@ -1394,28 +1399,34 @@ func (a *App) Status() (string, error) {
 		fmt.Fprintln(&b, "Working tree: has uncommitted changes")
 	}
 	if state.HasRemote {
-		switch {
-		case state.IsDiverged:
-			fmt.Fprintln(&b, "Local and remote histories have diverged.")
-		case !state.HasRemoteBranch:
-			// A store created with a remote has commits that exist nowhere else
-			// yet, and no tracking ref to compare against, so the zero counts
-			// below would read as "in sync". They are not: nothing is backed up.
-			fmt.Fprintln(&b, "Nothing pushed to origin yet — run sync to publish the first commit.")
-		case state.Ahead == 0 && state.Behind == 0:
-			fmt.Fprintln(&b, "In sync with origin.")
-		default:
-			parts := make([]string, 0, 2)
-			if state.Ahead > 0 {
-				parts = append(parts, fmt.Sprintf("%d commit(s) ahead", state.Ahead))
-			}
-			if state.Behind > 0 {
-				parts = append(parts, fmt.Sprintf("%d commit(s) behind", state.Behind))
-			}
-			fmt.Fprintf(&b, "%s origin.\n", strings.Join(parts, ", "))
-		}
+		fmt.Fprintln(&b, remoteStatus(state))
 	}
 	return b.String(), nil
+}
+
+// remoteStatus describes how the local branch compares with origin, as the one
+// line that says so. It is separate from Status because all four cases are a
+// judgement about the remote alone, and none of them is reachable without one.
+func remoteStatus(state gitx.RepoState) string {
+	switch {
+	case state.IsDiverged:
+		return "Local and remote histories have diverged."
+	case !state.HasRemoteBranch:
+		// A store created with a remote has commits that exist nowhere else
+		// yet, and no tracking ref to compare against, so the zero counts
+		// below would read as "in sync". They are not: nothing is backed up.
+		return "Nothing pushed to origin yet — run sync to publish the first commit."
+	case state.Ahead == 0 && state.Behind == 0:
+		return "In sync with origin."
+	}
+	parts := make([]string, 0, 2)
+	if state.Ahead > 0 {
+		parts = append(parts, fmt.Sprintf("%d commit(s) ahead", state.Ahead))
+	}
+	if state.Behind > 0 {
+		parts = append(parts, fmt.Sprintf("%d commit(s) behind", state.Behind))
+	}
+	return fmt.Sprintf("%s origin.", strings.Join(parts, ", "))
 }
 
 // SetGitAuthor persists the author identity used for commits.

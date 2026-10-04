@@ -88,6 +88,16 @@ const (
 // obeyed.
 const allowMarker = "checkui:allow"
 
+// The style directives CheckIndexHTML resolves. style-src-attr and
+// style-src-elem fall back to style-src, so all three are named here rather
+// than spelled out at each use: a policy that relaxed any one of them is the
+// finding, and three copies of the name is three places to keep in step.
+const (
+	cspStyleSrc     = "style-src"
+	cspStyleSrcAttr = "style-src-attr"
+	cspStyleSrcElem = "style-src-elem"
+)
+
 // sink is a frontend construct that can execute code or parse markup as HTML.
 type sink struct {
 	rule string
@@ -159,14 +169,33 @@ func main() {
 // interactivity as well as unsafe HTML sinks; plain .ts/.js modules are checked
 // for the sinks alone.
 func CheckTree(root string) ([]Finding, error) {
+	files, err := collectSources(root)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+
+	var all []Finding
+	for _, path := range files {
+		findings, err := checkFile(root, path)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, findings...)
+	}
+	return all, nil
+}
+
+// collectSources lists the frontend source files under root, in no particular
+// order: CheckTree sorts them.
+func collectSources(root string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			// Dependencies and build output are never first-party source.
-			if name := d.Name(); name == "node_modules" || name == "dist" || name == ".git" {
+			if skipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -180,25 +209,32 @@ func CheckTree(root string) ([]Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(files)
+	return files, nil
+}
 
-	var all []Finding
-	for _, path := range files {
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
-		if strings.EqualFold(filepath.Ext(path), ".svelte") {
-			all = append(all, CheckComponent(rel, string(src))...)
-			continue
-		}
-		all = append(all, CheckModule(rel, string(src))...)
+// skipDir reports whether a directory holds nothing this tool should read.
+// Dependencies and build output are never first-party source, and node_modules
+// is large enough that walking into it is the difference between a gate that
+// runs in a second and one that does not.
+func skipDir(name string) bool {
+	return name == "node_modules" || name == "dist" || name == ".git"
+}
+
+// checkFile checks one source file, reporting findings under the path relative
+// to root so a finding names a file the way a person would write it.
+func checkFile(root, path string) ([]Finding, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	rel, relErr := filepath.Rel(root, path)
+	if relErr != nil {
+		rel = path
+	}
+	if strings.EqualFold(filepath.Ext(path), ".svelte") {
+		return CheckComponent(rel, string(src)), nil
+	}
+	return CheckModule(rel, string(src)), nil
 }
 
 // scriptRe captures the contents of a top-level <script> block. The component
@@ -221,59 +257,9 @@ func CheckComponent(file, src string) []Finding {
 	findings := CheckSinks(file, src)
 
 	for _, tag := range scanTags(src) {
-		if isStyleAttribute(tag) {
-			if line, ok := attributeLine(src, tag, styleAttrRe); ok {
-				findings = append(findings, Finding{
-					File:    file,
-					Line:    line,
-					Rule:    ruleInlineStyle,
-					Message: fmt.Sprintf("<%s> sets an inline style; style-src 'self' makes the webview drop it with no error, so put the rule in src/style.css and use a class (suppress with a %q comment if it is deliberate)", tag.name, allowMarker),
-				})
-			}
-		}
-		// off is the offset of the dead placeholder itself, so the allow
-		// marker is read from the line the mistake is written on.
-		if off, ok := deadInterpolation(src, tag); ok && !isSuppressed(src, off) {
-			findings = append(findings, Finding{
-				File:    file,
-				Line:    lineOf(src, off),
-				Rule:    ruleDeadInterpolation,
-				Message: fmt.Sprintf("<%s> writes a {placeholder} inside a quoted string in an attribute expression, where Svelte does not interpolate; the text reaches the DOM verbatim (put the conditional in a class: directive, or build the string in the script block)", tag.name),
-			})
-		}
-		if tag.name != "button" {
-			continue
-		}
-		if hasClickHandler(tag.attrs) || isSubmitButton(tag.attrs) {
-			continue
-		}
-		findings = append(findings, Finding{
-			File:    file,
-			Line:    tag.line,
-			Rule:    ruleButtonNoHandler,
-			Message: "<button> has no on:click handler and no type=\"submit\", so clicking it does nothing",
-		})
+		findings = append(findings, checkTag(file, src, tag)...)
 	}
-
-	// script holds byte index pairs into src: [whole, bodyStart, bodyEnd].
-	script := scriptRe.FindStringSubmatchIndex(src)
-	if script != nil {
-		body := src[script[2]:script[3]]
-		for _, m := range funcDeclRe.FindAllStringSubmatchIndex(body, -1) {
-			name := body[m[2]:m[3]]
-			// A declaration contributes exactly one occurrence of its own
-			// name. Anything else in the file (script body, markup, event
-			// handler) is a real reference.
-			if len(identRe(name).FindAllStringIndex(src, -1)) < 2 {
-				findings = append(findings, Finding{
-					File:    file,
-					Line:    lineOf(src, script[2]+m[0]),
-					Rule:    ruleOrphanHandler,
-					Message: fmt.Sprintf("function %s is declared but never referenced; it can never be called", name),
-				})
-			}
-		}
-	}
+	findings = append(findings, checkOrphans(file, src)...)
 
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Line != findings[j].Line {
@@ -281,6 +267,73 @@ func CheckComponent(file, src string) []Finding {
 		}
 		return findings[i].Rule < findings[j].Rule
 	})
+	return findings
+}
+
+// checkTag applies the markup rules to one element open tag. The rules are
+// independent of each other -- a tag can trip more than one -- so each reports
+// independently rather than short-circuiting on the first.
+func checkTag(file, src string, t tag) []Finding {
+	var findings []Finding
+
+	if isStyleAttribute(t) {
+		if line, ok := attributeLine(src, t, styleAttrRe); ok {
+			findings = append(findings, Finding{
+				File:    file,
+				Line:    line,
+				Rule:    ruleInlineStyle,
+				Message: fmt.Sprintf("<%s> sets an inline style; style-src 'self' makes the webview drop it with no error, so put the rule in src/style.css and use a class (suppress with a %q comment if it is deliberate)", t.name, allowMarker),
+			})
+		}
+	}
+
+	// off is the offset of the dead placeholder itself, so the allow
+	// marker is read from the line the mistake is written on.
+	if off, ok := deadInterpolation(src, t); ok && !isSuppressed(src, off) {
+		findings = append(findings, Finding{
+			File:    file,
+			Line:    lineOf(src, off),
+			Rule:    ruleDeadInterpolation,
+			Message: fmt.Sprintf("<%s> writes a {placeholder} inside a quoted string in an attribute expression, where Svelte does not interpolate; the text reaches the DOM verbatim (put the conditional in a class: directive, or build the string in the script block)", t.name),
+		})
+	}
+
+	if t.name == "button" && !hasClickHandler(t.attrs) && !isSubmitButton(t.attrs) {
+		findings = append(findings, Finding{
+			File:    file,
+			Line:    t.line,
+			Rule:    ruleButtonNoHandler,
+			Message: "<button> has no on:click handler and no type=\"submit\", so clicking it does nothing",
+		})
+	}
+	return findings
+}
+
+// checkOrphans reports every function the script block declares that nothing
+// else in the file references.
+func checkOrphans(file, src string) []Finding {
+	var findings []Finding
+
+	// script holds byte index pairs into src: [whole, bodyStart, bodyEnd].
+	script := scriptRe.FindStringSubmatchIndex(src)
+	if script == nil {
+		return nil
+	}
+	body := src[script[2]:script[3]]
+	for _, m := range funcDeclRe.FindAllStringSubmatchIndex(body, -1) {
+		name := body[m[2]:m[3]]
+		// A declaration contributes exactly one occurrence of its own
+		// name. Anything else in the file (script body, markup, event
+		// handler) is a real reference.
+		if len(identRe(name).FindAllStringIndex(src, -1)) < 2 {
+			findings = append(findings, Finding{
+				File:    file,
+				Line:    lineOf(src, script[2]+m[0]),
+				Rule:    ruleOrphanHandler,
+				Message: fmt.Sprintf("function %s is declared but never referenced; it can never be called", name),
+			})
+		}
+	}
 	return findings
 }
 
@@ -461,9 +514,9 @@ func CheckIndexHTML(path string) ([]Finding, error) {
 	// first chain that resolves to one is reported, because one relaxed style
 	// directive is one problem however many names inherit it.
 	for _, chain := range [][]string{
-		{"style-src"},
-		{"style-src-attr", "style-src"},
-		{"style-src-elem", "style-src"},
+		{cspStyleSrc},
+		{cspStyleSrcAttr, cspStyleSrc},
+		{cspStyleSrcElem, cspStyleSrc},
 	} {
 		if !allowsUnsafeInline(firstDirective(directives, chain)) {
 			continue
@@ -589,118 +642,139 @@ func isTagNameByte(b byte) bool {
 func scanTagEnd(src string, from int) (end int, selfClosing bool) {
 	depth := 0
 	for i := from; i < len(src); i++ {
-		switch c := src[i]; c {
-		case '"', '\'':
-			// Skip to the matching quote, honouring backslash escapes.
-			for i++; i < len(src); i++ {
-				if src[i] == '\\' {
-					i++
-					continue
-				}
-				if src[i] == c {
-					break
-				}
-			}
-		case '{':
+		c := src[i]
+		if c == '"' || c == '\'' {
+			i = skipQuoted(src, i, c)
+			continue
+		}
+		if c == '{' {
 			depth++
-		case '}':
+			continue
+		}
+		if c == '}' {
 			if depth > 0 {
 				depth--
 			}
-		case '/':
-			// Only a '/' immediately before the closing '>' self-closes.
-			if depth == 0 && i+1 < len(src) && src[i+1] == '>' {
-				return i + 1, true
-			}
-		case '>':
-			if depth == 0 {
-				return i, false
-			}
+			continue
+		}
+		// Inside an expression a '>' or '/' belongs to the expression, so only
+		// depth 0 can end the tag.
+		if depth > 0 {
+			continue
+		}
+		if e, self, ok := tagEndAt(src, i); ok {
+			return e, self
 		}
 	}
 	return len(src), false
+}
+
+// tagEndAt reports whether src[i] closes a tag: the offset just past it,
+// whether the tag self-closes, and whether it closed at all. A '/' only counts
+// immediately before the closing '>'.
+func tagEndAt(src string, i int) (end int, selfClosing bool, ok bool) {
+	switch src[i] {
+	case '>':
+		return i, false, true
+	case '/':
+		if i+1 < len(src) && src[i+1] == '>' {
+			return i + 1, true, true
+		}
+	}
+	return 0, false, false
+}
+
+// skipQuoted returns the offset of the quote closing the quoted string that
+// starts at src[i], honouring backslash escapes, or len(src) if it never
+// closes. The result is the quote itself, so the caller's loop increment steps
+// past it.
+func skipQuoted(src string, i int, quote byte) int {
+	for i++; i < len(src); i++ {
+		switch src[i] {
+		case '\\':
+			i++
+		case quote:
+			return i
+		}
+	}
+	return len(src)
 }
 
 // parseAttrs splits the raw attribute section of a tag into attributes.
 func parseAttrs(raw string) []attr {
 	var attrs []attr
 	for i := 0; i < len(raw); {
-		for i < len(raw) && isSpace(raw[i]) {
-			i++
-		}
-		if i >= len(raw) {
+		i = skipSpace(raw, i)
+		// A '/' that is not part of a name ends the attribute section: it is
+		// the self-closing marker.
+		if i >= len(raw) || raw[i] == '/' {
 			break
 		}
-		if raw[i] == '/' {
-			break
-		}
-		start := i
-		for i < len(raw) && !isSpace(raw[i]) && raw[i] != '=' && raw[i] != '/' {
-			i++
-		}
-		name := raw[start:i]
+		name, next := scanAttrName(raw, i)
 		if name == "" {
-			i++
+			// Nothing consumable at this offset; step over it rather than spin.
+			i = next + 1
 			continue
 		}
-		attr := attr{name: name}
-		for i < len(raw) && isSpace(raw[i]) {
-			i++
-		}
-		if i < len(raw) && raw[i] == '=' {
-			i++
-			for i < len(raw) && isSpace(raw[i]) {
-				i++
-			}
-			if i < len(raw) {
-				attr.expr = raw[i] == '{'
-				var value string
-				value, i = scanAttrValue(raw, i)
-				attr.value = value
-			}
-		}
-		attrs = append(attrs, attr)
+		a := attr{name: name}
+		i = scanAttrValue(raw, next, &a)
+		attrs = append(attrs, a)
 	}
 	return attrs
 }
 
-// scanAttrValue reads an attribute value starting at raw[i] and returns it along
-// with the offset just past the value. Quoted strings, Svelte expression braces
-// and bare values are all supported; nested braces and quotes inside an
-// expression are tracked so that `{a ? 'x' : 'y'}` is read as one value.
-func scanAttrValue(raw string, i int) (string, int) {
-	switch raw[i] {
-	case '"', '\'':
-		quote := raw[i]
+// skipSpace returns the offset of the first byte at or after i that is not
+// whitespace, or len(raw).
+func skipSpace(raw string, i int) int {
+	for i < len(raw) && isSpace(raw[i]) {
 		i++
-		vs := i
-		for i < len(raw) && raw[i] != quote {
-			i++
+	}
+	return i
+}
+
+// scanAttrName reads the bare attribute name at raw[i] and returns it with the
+// offset just past it. A name ends at whitespace, '=', the self-closing '/', or
+// the end of the attribute section.
+func scanAttrName(raw string, i int) (string, int) {
+	start := i
+	for i < len(raw) && !isSpace(raw[i]) && raw[i] != '=' && raw[i] != '/' {
+		i++
+	}
+	return raw[start:i], i
+}
+
+// scanAttrValue reads the "= value" part of an attribute into a and returns the
+// offset just past it. A name with no '=' after it is a boolean attribute, and
+// a leaves its empty value and expr=false.
+func scanAttrValue(raw string, i int, a *attr) int {
+	i = skipSpace(raw, i)
+	if i >= len(raw) || raw[i] != '=' {
+		return i
+	}
+	i = skipSpace(raw, i+1)
+	if i >= len(raw) {
+		return i
+	}
+	a.expr = raw[i] == '{'
+	a.value, i = scanAttrValueAt(raw, i)
+	return i
+}
+
+// scanAttrValueAt reads an attribute value starting at raw[i] and returns it
+// along with the offset just past the value. Quoted strings, Svelte expression
+// braces and bare values are all supported; nested braces and quotes inside an
+// expression are tracked so that `{a ? 'x' : 'y'}` is read as one value.
+func scanAttrValueAt(raw string, i int) (string, int) {
+	switch c := raw[i]; c {
+	case '"', '\'':
+		end := advanceToQuote(raw, i+1, c)
+		value := raw[i+1 : end]
+		if end < len(raw) {
+			end++
 		}
-		value := raw[vs:i]
-		if i < len(raw) {
-			i++
-		}
-		return value, i
+		return value, end
 	case '{':
-		depth := 0
-		vs := i + 1
-		for ; i < len(raw); i++ {
-			switch raw[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					return raw[vs:i], i + 1
-				}
-			case '"', '\'':
-				quote := raw[i]
-				for i++; i < len(raw) && raw[i] != quote; i++ {
-				}
-			}
-		}
-		return raw[vs:], i
+		return scanBracedValue(raw, i)
 	default:
 		vs := i
 		for i < len(raw) && !isSpace(raw[i]) {
@@ -708,6 +782,44 @@ func scanAttrValue(raw string, i int) (string, int) {
 		}
 		return raw[vs:i], i
 	}
+}
+
+// advanceToQuote returns the offset of the next quote at or after i, or
+// len(raw) if there is none. Unlike skipQuoted it does not honour backslash
+// escapes: inside a Svelte expression a backslash is an ordinary character, so
+// the first matching quote is the end of the string.
+func advanceToQuote(raw string, i int, quote byte) int {
+	for i < len(raw) && raw[i] != quote {
+		i++
+	}
+	return i
+}
+
+// scanBracedValue reads the Svelte expression that starts at raw[i] == '{' and
+// returns its body with the offset just past the closing brace. An unterminated
+// expression runs to the end of the attribute section, which is what an
+// unterminated one in the source is.
+func scanBracedValue(raw string, i int) (string, int) {
+	depth := 0
+	vs := i + 1
+	for ; i < len(raw); i++ {
+		c := raw[i]
+		if c == '{' {
+			depth++
+			continue
+		}
+		if c == '}' {
+			depth--
+			if depth == 0 {
+				return raw[vs:i], i + 1
+			}
+			continue
+		}
+		if c == '"' || c == '\'' {
+			i = advanceToQuote(raw, i+1, c)
+		}
+	}
+	return raw[vs:], i
 }
 
 // hasClickHandler reports whether the tag is bound to a click event in either

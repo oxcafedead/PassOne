@@ -131,25 +131,10 @@ func openPE(path string) (*pe, error) {
 	}
 	p := &pe{data: data}
 
-	e, err := p.u16(0)
+	peOff, err := p.peHeaderOffset(path)
 	if err != nil {
 		return nil, err
 	}
-	if e != 0x5A4D { // "MZ"
-		return nil, fmt.Errorf("%s is not a PE file (bad DOS signature)", path)
-	}
-	peOff, err := p.u32(0x3C)
-	if err != nil {
-		return nil, err
-	}
-	sig, err := p.u32(int(peOff))
-	if err != nil {
-		return nil, err
-	}
-	if sig != 0x00004550 { // "PE\0\0"
-		return nil, fmt.Errorf("%s has no PE signature", path)
-	}
-
 	coff := int(peOff) + 4
 	numSec, err := p.u16(coff + 2)
 	if err != nil {
@@ -159,51 +144,20 @@ func openPE(path string) (*pe, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	optOfs := coff + 20
-	magic, err := p.u16(optOfs)
+	is64, err := p.is64BitOptionalHeader(optOfs)
 	if err != nil {
 		return nil, err
 	}
-	is64 := magic == 0x20B // IMAGE_OPTIONAL_HEADER64
-	numDD, err := p.u32(optOfs + numDataDirectoryOffset(is64))
+	resRva, err := p.resourceDirectoryRVA(path, optOfs, is64)
 	if err != nil {
 		return nil, err
-	}
-	if numDD <= 2 {
-		return nil, fmt.Errorf("%s has no data directories", path)
-	}
-	ddOfs := optOfs + dataDirectoryOffset(is64)
-	resRva, err := p.u32(ddOfs + 2*8)
-	if err != nil {
-		return nil, err
-	}
-	if resRva == 0 {
-		return nil, fmt.Errorf("%s has no resource directory (built with -nopackage?)", path)
 	}
 
 	for i := 0; i < int(numSec); i++ {
-		o := optOfs + int(sizeOpt) + i*40
-		vs, err := p.u32(o + 8)
-		if err != nil {
+		if err := p.addSection(optOfs + int(sizeOpt) + i*40); err != nil {
 			return nil, err
 		}
-		va, err := p.u32(o + 12)
-		if err != nil {
-			return nil, err
-		}
-		rawSz, err := p.u32(o + 16)
-		if err != nil {
-			return nil, err
-		}
-		raw, err := p.u32(o + 20)
-		if err != nil {
-			return nil, err
-		}
-		if rawSz == 0 {
-			continue
-		}
-		p.secs = append(p.secs, section{va: va, vsz: vs, raw: raw})
 	}
 
 	p.resRoot, err = p.rvaToOff(resRva)
@@ -211,6 +165,91 @@ func openPE(path string) (*pe, error) {
 		return nil, fmt.Errorf("locating resource directory: %w", err)
 	}
 	return p, nil
+}
+
+// peHeaderOffset validates the DOS stub and returns the offset of the PE
+// signature. Both signatures are checked before any other field is read, so a
+// file that is not a PE image fails with a message saying so rather than with a
+// short-read error from wherever the first field happened to land.
+func (p *pe) peHeaderOffset(path string) (uint32, error) {
+	e, err := p.u16(0)
+	if err != nil {
+		return 0, err
+	}
+	if e != 0x5A4D { // "MZ"
+		return 0, fmt.Errorf("%s is not a PE file (bad DOS signature)", path)
+	}
+	peOff, err := p.u32(0x3C)
+	if err != nil {
+		return 0, err
+	}
+	sig, err := p.u32(int(peOff))
+	if err != nil {
+		return 0, err
+	}
+	if sig != 0x00004550 { // "PE\0\0"
+		return 0, fmt.Errorf("%s has no PE signature", path)
+	}
+	return peOff, nil
+}
+
+// is64BitOptionalHeader reports whether the optional header is
+// IMAGE_OPTIONAL_HEADER64. It matters because the 64-bit header moves the data
+// directory table, so every offset derived from it shifts with the answer.
+func (p *pe) is64BitOptionalHeader(optOfs int) (bool, error) {
+	magic, err := p.u16(optOfs)
+	if err != nil {
+		return false, err
+	}
+	// 0x20B is IMAGE_OPTIONAL_HEADER64, 0x10B the 32-bit one.
+	return magic == 0x20B, nil
+}
+
+// resourceDirectoryRVA returns the RVA of the resource directory, which is data
+// directory entry 2. A zero there is the exact failure this tool exists to
+// catch, so it gets a message naming the build flag that causes it.
+func (p *pe) resourceDirectoryRVA(path string, optOfs int, is64 bool) (uint32, error) {
+	numDD, err := p.u32(optOfs + numDataDirectoryOffset(is64))
+	if err != nil {
+		return 0, err
+	}
+	if numDD <= 2 {
+		return 0, fmt.Errorf("%s has no data directories", path)
+	}
+	resRva, err := p.u32(optOfs + dataDirectoryOffset(is64) + 2*8)
+	if err != nil {
+		return 0, err
+	}
+	if resRva == 0 {
+		return 0, fmt.Errorf("%s has no resource directory (built with -nopackage?)", path)
+	}
+	return resRva, nil
+}
+
+// addSection appends one section header. A section with no raw data occupies no
+// bytes in the file, so there is nothing for an RVA in it to map to.
+func (p *pe) addSection(o int) error {
+	vs, err := p.u32(o + 8)
+	if err != nil {
+		return err
+	}
+	va, err := p.u32(o + 12)
+	if err != nil {
+		return err
+	}
+	rawSz, err := p.u32(o + 16)
+	if err != nil {
+		return err
+	}
+	raw, err := p.u32(o + 20)
+	if err != nil {
+		return err
+	}
+	if rawSz == 0 {
+		return nil
+	}
+	p.secs = append(p.secs, section{va: va, vsz: vs, raw: raw})
+	return nil
 }
 
 func numDataDirectoryOffset(is64 bool) int {
@@ -260,26 +299,34 @@ func (p *pe) walkDir(off, depth int, found map[uint32]bool) error {
 	for i := 0; i < count; i++ {
 		nameOrID := binary.LittleEndian.Uint32(base[i*8:])
 		offTo := binary.LittleEndian.Uint32(base[i*8+4:])
-		if offTo&0x80000000 != 0 { // IMAGE_RESOURCE_DATA_IS_DIRECTORY
-			child, err := p.resolve(offTo & 0x7FFFFFFF)
-			if err != nil {
-				return fmt.Errorf("resolving resource subdirectory: %w", err)
-			}
-			if nameOrID&0x80000000 == 0 && depth == 0 {
-				found[nameOrID] = true
-			}
-			if err := p.walkDir(child, depth+1, found); err != nil {
-				return err
-			}
-			continue
-		}
-		leaf, err := p.resolve(offTo)
-		if err != nil {
-			return fmt.Errorf("resolving resource leaf: %w", err)
-		}
-		if _, err := p.u32(leaf); err != nil {
+		if err := p.walkEntry(nameOrID, offTo, depth, found); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// walkEntry visits one resource directory entry, which is either a subdirectory
+// to descend into or a leaf that has to be readable.
+func (p *pe) walkEntry(nameOrID, offTo uint32, depth int, found map[uint32]bool) error {
+	if offTo&0x80000000 == 0 { // not IMAGE_RESOURCE_DATA_IS_DIRECTORY
+		leaf, err := p.resolve(offTo)
+		if err != nil {
+			return fmt.Errorf("resolving resource leaf: %w", err)
+		}
+		// Reading the leaf's first word is only to prove the offset is inside
+		// the file: a resource table pointing past the end is malformed.
+		if _, err := p.u32(leaf); err != nil {
+			return err
+		}
+		return nil
+	}
+	child, err := p.resolve(offTo & 0x7FFFFFFF)
+	if err != nil {
+		return fmt.Errorf("resolving resource subdirectory: %w", err)
+	}
+	if nameOrID&0x80000000 == 0 && depth == 0 {
+		found[nameOrID] = true
+	}
+	return p.walkDir(child, depth+1, found)
 }

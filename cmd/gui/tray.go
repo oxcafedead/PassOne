@@ -72,24 +72,47 @@ func trayReady() {
 		for {
 			select {
 			case <-openItem.ClickedCh:
-				if ctx := globalCtx(); ctx != nil {
-					runtime.WindowShow(ctx)
-				}
+				trayShowWindow()
 			case <-lockItem.ClickedCh:
-				if a := trayApp(); a != nil {
-					a.Lock()
-				}
+				trayLock()
 			case <-updateItem.ClickedCh:
 				requestUpdateCheck()
 			case <-quitItem.ClickedCh:
-				requestQuit()
-				if ctx := globalCtx(); ctx != nil {
-					runtime.Quit(ctx)
-				}
+				trayQuit()
 				return
 			}
 		}
 	}()
+}
+
+// The three menu handlers are separate functions so trayReady reads as the menu
+// it builds rather than as its behaviour. Each is also where its own nil guard
+// lives: globalCtx and trayApp return nil until startup finishes, and a tray
+// click in that window is the one event with no caller able to ask again later.
+
+// trayShowWindow brings the window up. A closed window only hides it, so this
+// is also how a tray-launched app is brought back.
+func trayShowWindow() {
+	if ctx := globalCtx(); ctx != nil {
+		runtime.WindowShow(ctx)
+	}
+}
+
+// trayLock drops the keys from memory, leaving the app running but locked.
+func trayLock() {
+	if a := trayApp(); a != nil {
+		a.Lock()
+	}
+}
+
+// trayQuit asks for the quit before ending the process, so that a tray loop
+// stopping for this reason is recognised as ordinary teardown rather than the
+// fault that makes watchTray exit the process. The order matters.
+func trayQuit() {
+	requestQuit()
+	if ctx := globalCtx(); ctx != nil {
+		runtime.Quit(ctx)
+	}
 }
 
 // requestUpdateCheck asks the frontend to run an update check, bringing the

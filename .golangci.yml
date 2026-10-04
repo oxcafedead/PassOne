@@ -19,6 +19,10 @@ linters:
     - misspell
     - revive
     - unconvert
+    # Cognitive complexity, at SonarQube's go:S3776 threshold. Sonar *reports*
+    # this on the dashboard; this makes it fail the build, so a function cannot
+    # cross 15 and sit there until someone goes looking for it.
+    - gocognit
   settings:
     revive:
       rules:
@@ -30,6 +34,22 @@ linters:
       # Report unchecked errors even in type assertions.
       check-type-assertions: false
       check-blank: false
+    gocognit:
+      # 15 is Sonar's own limit, so the gate and the dashboard cannot disagree.
+      # Note gocognit is the stricter of the two: it scores switch bodies more
+      # harshly, so a function it passes at 15 is certainly under Sonar's too.
+      min-complexity: 15
+  exclusions:
+    rules:
+      # Tests are excluded, and that is a judgement rather than a convenience.
+      # A table-driven test's complexity is mostly irreducible setup plus a long
+      # tail of assertions, and decomposing it into helpers makes a failure
+      # harder to read, not easier -- the opposite of what this linter is for.
+      # Sonar does score test functions, so expect its count here to stay above
+      # zero; it is not the gate.
+      - path: _test\.go
+        linters:
+          - gocognit
 
 formatters:
   enable:

@@ -80,7 +80,7 @@ npm run dev
 
 ## Lint / format
 
-Config lives in `.golangci.yml`. Enabled linters include `errcheck`, `revive`, `gocritic`, `gofmt`, `unused`, etc.
+Config lives in `.golangci.yml`. Enabled linters include `errcheck`, `revive`, `gocritic`, `gofmt`, `unused`, `gocognit`, etc.
 
 ```powershell
 # Format all Go files
@@ -92,6 +92,43 @@ go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --time
 ```
 
 CI (`.github/workflows/ci.yml`) installs golangci-lint with `install-mode: goinstall` to avoid the same version mismatch.
+
+### The cognitive-complexity gate (`gocognit`, threshold 15)
+
+`gocognit` is enabled at `min-complexity: 15`, and 15 is SonarQube's own
+`go:S3776` limit. The point of running it in the linter rather than only on the
+dashboard is that **Sonar reports, the linter blocks**: without this a function
+can cross the line and sit there indefinitely, because nothing fails the build
+and the count is one number on a page nobody opens.
+
+Two properties are load-bearing, and both are judgement rather than taste:
+
+- **`gocognit` is stricter than Sonar, not the same.** It scores `switch` bodies
+  more harshly, so it finds functions Sonar does not (`gitx.Pull` was ~24 and
+  Sonar had never heard of it) — but it never misses one Sonar found at the same
+  threshold, because the two differ by being harsher rather than by measuring
+  something else. Passing this gate therefore implies passing Sonar, not the
+  reverse. Expect the Sonar count to stay lower than the gate's.
+- **Tests are excluded, and that is a decision.** 35 of the 40 functions over 15
+  were in `_test.go`. A table-driven test's complexity is mostly irreducible
+  setup plus a long tail of assertions, and decomposing it into helpers makes a
+  failure harder to read, not easier — the opposite of what the linter is for.
+  Sonar *does* score test functions, so its count here will stay above zero; it
+  is not the gate.
+
+**Raising the threshold is almost never the right response.** The gate's value is
+that it stops a function growing, and raising the bar to clear today's offender
+removes that. Split the function instead — every one of the five that were
+already over the line when this was added (`checkicon.openPE`,
+`checkicon.(*pe).walkDir`, `gitx.Pull`, `checkui.CheckTree`, `gui.trayReady`) got
+there by accumulating unrelated decisions, and splitting along that seam made each
+of them shorter without needing a single new comment.
+
+To see the numbers without the linter:
+
+```powershell
+go run github.com/uudashr/gocognit/cmd/gocognit@v1.2.0 -over 15 <files...>
+```
 
 ## CI / quality gates
 
@@ -407,6 +444,48 @@ Two things follow, and each is a test:
 menu goroutine, so they are behind `appMu`. The `ctx != nil` / `a != nil` checks
 read as guards but are not one without it: `context.Context` is two words, and a
 torn read pairs a type pointer with another value's data pointer.
+
+### What the SonarCloud scan is allowed to complain about, and what it is not
+
+`sonar-project.properties` sets `sonar.sources=.` and `sonar.tests=.`, so the
+scan covers production code, tests and the CI tooling alike. That is why most of
+the open issue count is not about the vault: it is the frontend test harness and
+the gate tools. Read the rule and the file before treating a count as a defect.
+
+Findings that are **deliberate** and should not be "fixed":
+
+- **`go:S4036` on `tools/coveragecheck` (`exec.Command("go", ...)`)** — the tool
+  shells out to the Go toolchain CI installed. Resolving it by absolute path
+  would mean hardcoding a toolchain location, which is the opposite of portable.
+- **`godre:S8242` on `internal/ui.GUI.ctx`** — a `context.Context` held in a
+  struct field is what the Wails binding requires: `SetContext` is called once
+  during startup and the stored value is what `EventsEmit` needs long after.
+  Passing it per-method would mean threading it through the tray, which has no
+  context of its own to pass. Same shape as `cmd/gui`'s `appCtx` above.
+- **`Web:S7039` in `cmd/gui/frontend/index.html`** — reported when `style-src`
+  carries `'unsafe-inline'`. The checked-in policy does not; the rewrite lives in
+  `vite.config.ts` and is dev-only (see the CSP section). If this reappears,
+  check which analysis it came from before touching `index.html`.
+
+Findings that are **noise in the frontend test harness**:
+
+- **`typescript:S7503` (`async` with no `await`) in
+  `cmd/gui/frontend/test/bridge.ts`** — that file is a hand-written stand-in for
+  the *generated* `wailsjs` modules, and every real binding is async. Dropping
+  `async` would make the mock less faithful to what it stands in for, and the
+  `await`s in `app.test.ts` would still resolve. The async-ness is the contract.
+- **`typescript:S7780` (`String.raw`) in `test/`** — cosmetic in assertions that
+  exist to fail loudly if the string under test changes.
+
+Cognitive complexity (`go:S3776`) is reported as **CRITICAL** on every function
+over 15, which is most of the severity budget in this project and none of it is a
+security signal. Zero open `BUG`s is the number that matters here.
+
+Note that Sonar's Go S3776 and `gocognit` disagree: `internal/gitx.Pull` (~24 by
+`gocognit`) and `tools/checkui.CheckTree` (~18) are not flagged by Sonar, because
+it scores `switch` bodies more leniently. Both are now under the
+`gocognit` gate after being split (see the complexity gate above), so the two
+tools agreeing is now the expected state rather than a coincidence.
 
 ## Releases
 

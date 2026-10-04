@@ -17,6 +17,16 @@ import (
 	"golang.org/x/term"
 )
 
+// The two lock-password prompts, kept apart on purpose. A prompt that explains
+// the lock password seals every stored key is shown when one is being *set*
+// (generating a key, importing one, changing it), because that is the moment the
+// consequence is being chosen. Unlocking an existing vault does not get it: the
+// user already chose, and the long form on every show/copy would be noise.
+const (
+	lockPassPromptSet    = "Lock password (used to seal all stored keys): "
+	lockPassPromptUnlock = "Lock password: "
+)
+
 // env carries the application instance and streams so commands are testable.
 type env struct {
 	app     *app.App
@@ -122,7 +132,7 @@ func cmdGenPGPKey(e *env, args []string) error {
 		return errors.New("the passphrases do not match")
 	}
 
-	lockPass := readPassphrase(e, "Lock password (used to seal all stored keys): ")
+	lockPass := readPassphrase(e, lockPassPromptSet)
 	if len(lockPass) == 0 {
 		return errors.New("a non-empty lock password is required")
 	}
@@ -180,7 +190,7 @@ func cmdImportPGP(e *env, args []string) error {
 	defer zero(block)
 
 	e.println("Parsing key...")
-	lockPass := readPassphrase(e, "Lock password (used to seal all stored keys): ")
+	lockPass := readPassphrase(e, lockPassPromptSet)
 	if len(lockPass) == 0 {
 		return errors.New("a non-empty lock password is required")
 	}
@@ -205,7 +215,7 @@ func cmdImportSSH(e *env, args []string) error {
 	}
 	defer zero(pem)
 
-	lockPass := readPassphrase(e, "Lock password (used to seal all stored keys): ")
+	lockPass := readPassphrase(e, lockPassPromptSet)
 	if len(lockPass) == 0 {
 		return errors.New("a non-empty lock password is required")
 	}
@@ -635,7 +645,7 @@ func ensurePGPUnlocked(e *env) error {
 	if e.app.IsUnlocked() {
 		return nil
 	}
-	lockPass := readPassphrase(e, "Lock password: ")
+	lockPass := readPassphrase(e, lockPassPromptUnlock)
 	if len(lockPass) == 0 {
 		return errors.New("a non-empty lock password is required")
 	}
@@ -653,7 +663,7 @@ func ensureSSHUnlocked(e *env) error {
 	if e.app.HasSSHKeyLoaded() {
 		return nil
 	}
-	lockPass := readPassphrase(e, "Lock password: ")
+	lockPass := readPassphrase(e, lockPassPromptUnlock)
 	if len(lockPass) == 0 {
 		return errors.New("a non-empty lock password is required")
 	}
@@ -665,7 +675,7 @@ func ensureSSHUnlocked(e *env) error {
 }
 
 func unlockPrompt(e *env) error {
-	lockPass := readPassphrase(e, "Lock password: ")
+	lockPass := readPassphrase(e, lockPassPromptUnlock)
 	if len(lockPass) == 0 {
 		return errors.New("a non-empty lock password is required")
 	}

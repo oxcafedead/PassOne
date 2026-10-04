@@ -415,38 +415,54 @@ func Pull(dir string, auth transport.AuthMethod) error {
 		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
 	}
 	err = wt.Pull(opts)
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, goGit.NoErrAlreadyUpToDate):
+		return ErrUpToDate
+	case errors.Is(err, transport.ErrEmptyRemoteRepository):
+		return ErrRemoteEmpty
+	case errors.Is(err, goGit.ErrNonFastForwardUpdate):
+		return resolveNonFastForward(repo, wt, opts)
+	default:
+		return fmt.Errorf("pull failed: %v", err)
+	}
+}
+
+// resolveNonFastForward integrates a diverged remote when the two sides touched
+// no path in common, and refuses when they did. A store holds one file per
+// entry, so "no path in common" means no entry was edited on both sides and a
+// hard reset to the remote loses nothing local.
+func resolveNonFastForward(repo *goGit.Repository, wt *goGit.Worktree, opts *goGit.PullOptions) error {
+	head, err := repo.Head()
 	if err != nil {
-		switch {
-		case errors.Is(err, goGit.NoErrAlreadyUpToDate):
-			return ErrUpToDate
-		case errors.Is(err, transport.ErrEmptyRemoteRepository):
-			return ErrRemoteEmpty
-		case errors.Is(err, goGit.ErrNonFastForwardUpdate):
-			head, herr := repo.Head()
-			if herr != nil {
-				return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
-			}
-			refName := head.Name()
-			if opts.ReferenceName != plumbing.HEAD && opts.ReferenceName != "" {
-				refName = opts.ReferenceName
-			}
-			remoteRef, rerr := repo.Reference(plumbing.NewRemoteReferenceName("origin", refName.Short()), true)
-			if rerr != nil {
-				return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
-			}
-			conflicts, cerr := hasConflicts(repo, head, remoteRef)
-			if cerr != nil || conflicts {
-				return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
-			}
-			if err := wt.Reset(&goGit.ResetOptions{Commit: remoteRef.Hash(), Mode: goGit.HardReset}); err != nil {
-				return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
-			}
-			return nil
-		default:
-			return fmt.Errorf("pull failed: %v", err)
-		}
+		return conflictErr()
+	}
+	refName := head.Name()
+	if opts.ReferenceName != plumbing.HEAD && opts.ReferenceName != "" {
+		refName = opts.ReferenceName
+	}
+	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", refName.Short()), true)
+	if err != nil {
+		return conflictErr()
+	}
+	conflicts, err := hasConflicts(repo, head, remoteRef)
+	if err != nil || conflicts {
+		return conflictErr()
+	}
+	if err := wt.Reset(&goGit.ResetOptions{Commit: remoteRef.Hash(), Mode: goGit.HardReset}); err != nil {
+		return conflictErr()
 	}
 	return nil
+}
+
+// conflictErr is the one message every refusal from resolveNonFastForward
+// gives. Overwriting a diverged vault is the single worst thing this package
+// could do, so the refusal is a single greppable sentence rather than four
+// near-identical ones that could drift apart.
+func conflictErr() error {
+	return fmt.Errorf("%w: local and remote histories have diverged; refusing to overwrite remote data", ErrConflict)
 }
 
 func getChangeName(ch *object.Change) string {
@@ -479,43 +495,49 @@ func hasConflicts(repo *goGit.Repository, head, remoteRef *plumbing.Reference) (
 		return false, err
 	}
 	if len(baseCommits) == 0 {
+		// Unrelated histories: there is no base to diff against, so no path can
+		// be shown to be untouched on both sides and every one of them conflicts.
 		return true, nil
 	}
-	baseCommit := baseCommits[0]
-	baseTree, err := baseCommit.Tree()
+	baseTree, err := baseCommits[0].Tree()
 	if err != nil {
 		return false, err
 	}
-	headTree, err := headCommit.Tree()
+	headNames, err := changedNames(baseTree, headCommit)
 	if err != nil {
 		return false, err
 	}
-	remoteTree, err := remoteCommit.Tree()
+	remoteNames, err := changedNames(baseTree, remoteCommit)
 	if err != nil {
 		return false, err
 	}
-	changesHead, err := object.DiffTree(baseTree, headTree)
-	if err != nil {
-		return false, err
-	}
-	changesRemote, err := object.DiffTree(baseTree, remoteTree)
-	if err != nil {
-		return false, err
-	}
-	headModified := make(map[string]bool)
-	for _, ch := range changesHead {
-		name := getChangeName(ch)
-		if name != "" {
-			headModified[name] = true
-		}
-	}
-	for _, ch := range changesRemote {
-		name := getChangeName(ch)
-		if name != "" && headModified[name] {
+	for name := range remoteNames {
+		if headNames[name] {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// changedNames returns the set of paths commit changed relative to baseTree.
+// Resolving the commit's own tree is part of the job, which is what keeps the
+// three tree lookups and the two diffs out of hasConflicts.
+func changedNames(baseTree *object.Tree, commit *object.Commit) (map[string]bool, error) {
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, err
+	}
+	changes, err := object.DiffTree(baseTree, tree)
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]bool, len(changes))
+	for _, ch := range changes {
+		if name := getChangeName(ch); name != "" {
+			names[name] = true
+		}
+	}
+	return names, nil
 }
 
 // Add stages one or more paths in the worktree.

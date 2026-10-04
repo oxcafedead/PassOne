@@ -84,7 +84,7 @@ func (s *Service) HasSecretMaterial() bool {
 
 // ImportSecret validates and takes ownership of an armored secret key block.
 // The passphrase is validated and the entity list is kept decrypted in memory.
-func (s *Service) ImportSecret(block []byte, passphrase []byte) ([]*KeyInfo, error) {
+func (s *Service) ImportSecret(block, passphrase []byte) ([]*KeyInfo, error) {
 	entities, err := readArmoredKeyRing(block)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse the OpenPGP private key: %v", err)
@@ -141,7 +141,7 @@ func (s *Service) ArmoredSecret() ([]byte, error) {
 
 // Unlock parses stored armored key material and decrypts the private keys
 // with the given passphrase, keeping the result in memory.
-func (s *Service) Unlock(block []byte, passphrase []byte) error {
+func (s *Service) Unlock(block, passphrase []byte) error {
 	entities, err := readArmoredKeyRing(block)
 	if err != nil {
 		return fmt.Errorf("unable to parse the stored OpenPGP key: %v", err)

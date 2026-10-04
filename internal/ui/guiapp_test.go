@@ -718,6 +718,50 @@ func TestRevealPathOpensADirectory(t *testing.T) {
 	}
 }
 
+// explorer.exe must be named by absolute path, not left to exec.LookPath to
+// find on PATH. A writable directory that happens to sort earlier on PATH would
+// otherwise supply the binary that is started with the app's own data directory
+// as its argument, which is a code-execution primitive handed to anything that
+// can write a file and edit an environment variable -- and this app's data
+// directory is one such file's home.
+func TestExplorerExeIsResolvedUnderSystemRoot(t *testing.T) {
+	t.Setenv("SystemRoot", `C:\Windows`)
+	t.Setenv("WINDIR", `C:\Windows`)
+	got := explorerExe()
+
+	want := filepath.Join(`C:\Windows`, "System32", "explorer.exe")
+	if got != want {
+		t.Fatalf("explorerExe() = %q, want %q", got, want)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("explorerExe() = %q, want an absolute path so PATH is never searched", got)
+	}
+}
+
+// WINDIR is the older spelling and the fallback, so a machine that only sets it
+// must not fall through to a bare name -- that is the case the PATH search the
+// absolute path removes would otherwise come back in through.
+func TestExplorerExeFallsBackToWINDIR(t *testing.T) {
+	t.Setenv("SystemRoot", "")
+	t.Setenv("WINDIR", `D:\WinNT`)
+	got := explorerExe()
+
+	if want := filepath.Join(`D:\WinNT`, "System32", "explorer.exe"); got != want {
+		t.Fatalf("explorerExe() = %q, want %q", got, want)
+	}
+}
+
+// With neither variable set the launcher degrades to the previous behaviour
+// rather than refusing to reveal a directory: revealing is a convenience, and
+// the one thing that must not happen is a wrong binary silently winning.
+func TestExplorerExeDegradesWhenSystemRootIsUnknown(t *testing.T) {
+	t.Setenv("SystemRoot", "")
+	t.Setenv("WINDIR", "")
+	if got := explorerExe(); got != "explorer.exe" {
+		t.Fatalf("explorerExe() = %q, want the bare name as a last resort", got)
+	}
+}
+
 func TestRevealPathRefusesAFileOrSomethingMissing(t *testing.T) {
 	g := newTestGUI(t)
 	calls := recordExplorer(t)

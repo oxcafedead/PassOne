@@ -226,8 +226,8 @@ func TestClearLeavesALaterValueAlone(t *testing.T) {
 	if _, err := writeText(later, nil); err != nil {
 		t.Fatalf("writeText: %v", err)
 	}
-	if err := clear(secret); err != nil {
-		t.Fatalf("clear: %v", err)
+	if err := clearIfOurs(secret); err != nil {
+		t.Fatalf("clearIfOurs: %v", err)
 	}
 	if got := currentText(t); got != later {
 		t.Fatalf("clipboard = %q, want %q", got, later)
@@ -252,9 +252,9 @@ func TestClearReportsAClipboardItCannotWipe(t *testing.T) {
 	wipeClipboard = func() error { return errors.New("simulated clipboard write failure") }
 	defer func() { wipeClipboard = prev }()
 
-	err := clear(sentinel)
+	err := clearIfOurs(sentinel)
 	if err == nil {
-		t.Fatal("clear reported success while the clipboard was neither readable nor writable")
+		t.Fatal("clearIfOurs reported success while the clipboard was neither readable nor writable")
 	}
 	if !strings.Contains(err.Error(), "could not be cleared") {
 		t.Fatalf("error = %q, want it to report the failed clear", err)
