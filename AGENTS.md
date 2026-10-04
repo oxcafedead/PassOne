@@ -487,6 +487,60 @@ it scores `switch` bodies more leniently. Both are now under the
 `gocognit` gate after being split (see the complexity gate above), so the two
 tools agreeing is now the expected state rather than a coincidence.
 
+### Sonar's coverage number and the local one measure different things
+
+`tools/coveragecheck` reported **77.3%** of Go *statements* while SonarCloud
+reported **64.3%**. That was not a disagreement about the Go code, and no
+instrumentation was missing. Two separate denominators:
+
+- **Sonar counts every language it analyses**, and at the time it analysed 1,106
+  lines of TypeScript plus 128 of PowerShell, none of which any step produced a
+  coverage report for. Only `sonar.go.coverage.reportPaths` was configured.
+- **Most of that TypeScript was the test harness.** `sonar.test.inclusions` was
+  `**/*_test.go`, which does not match `test/app.test.ts`, `bridge.ts`,
+  `runtime.ts` or `setup.ts`. With `sonar.sources=.` those four files were
+  classified as *production* code and measured as uncovered product: 1,069 of
+  the 1,078 uncovered TypeScript lines.
+
+`sonar.test.inclusions` now also lists `**/frontend/test/**`, and
+`sonar.coverage.exclusions` takes out the harness, the build configs and
+`tests/interop`. That moves coverage from 64.3% to a projected **~76%**, which
+is the Go figure all along (76.6% line-based vs 77.3% statement-based locally).
+Both are above the gate; only Sonar's was failing.
+
+An exclusion list is a claim that the code *cannot* be measured by this
+pipeline, so it stays short on purpose. `src/main.ts` is nine uncovered lines of
+real product code and is deliberately left in.
+
+There is deliberately **no** `sonar.javascript.lcov.reportPath` and no
+`@vitest/coverage-v8` dependency. Adding them looks like the obvious fix and
+would move this metric by almost nothing, which is worth knowing before anyone
+reaches for it.
+
+### Sonar cannot see the Svelte UI
+
+The scan analyses **zero `.svelte` files**. `cmd/gui/frontend/src/App.svelte` is
+2,554 lines and is the entire user interface, and SonarCloud has no Svelte
+analyser, so none of it appears in the scan at all — no issues, and no coverage
+either way.
+
+This is the context for the two facts above. The 49 `typescript:S7503` and 23
+`typescript:S7780` findings are all in the harness; the 1,069 lines Sonar called
+uncovered TypeScript are the harness; and the one frontend source file it does
+see, `src/main.ts`, is 9 lines of bootstrap. The frontend looks heavily
+uncovered and heavily smelly because what Sonar can see of the frontend is
+almost entirely its own test harness.
+
+So **frontend coverage wiring is not worth doing while `.svelte` is invisible**
+— it would report coverage for `src/main.ts` and nothing else, because the
+`lcov` entries for `App.svelte` would refer to a file the scan does not index.
+The 56 DOM tests do exercise `App.svelte`; that is enforced by them failing, and
+the coverage number would add nothing to it. Revisit if Sonar adds Svelte
+support, or if the UI is ever split out of the single component.
+
+Treat "coverage went up" from these changes as the accounting being corrected,
+not as new tests. No test was added or removed.
+
 ## Releases
 
 - Versioning is SemVer; releases are tagged `vMAJOR.MINOR.PATCH` on `main`.
