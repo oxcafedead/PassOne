@@ -3045,6 +3045,66 @@ func TestHasTOTP(t *testing.T) {
 	}
 }
 
+// TestUpdatedAt pins where a "last updated" date comes from and what it does
+// not require: the pass format carries no timestamp of its own, so the answer
+// is the .gpg file's mtime, which is metadata like the file list and therefore
+// available without unlocking — while still refusing an entry that is not
+// there instead of reporting the zero time.
+func TestUpdatedAt(t *testing.T) {
+	a := unlockWithStore(t)
+
+	if err := a.SavePassword("site", []byte("secret\nnotes\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	before, err := a.UpdatedAt("site")
+	if err != nil {
+		t.Fatalf("UpdatedAt: %v", err)
+	}
+	if before.IsZero() {
+		t.Fatal("UpdatedAt returned the zero time")
+	}
+
+	if _, err := a.UpdatedAt("nonexistent/path"); err == nil {
+		t.Fatal("expected UpdatedAt to fail for a non-existent password")
+	}
+
+	a.Lock()
+	if got, err := a.UpdatedAt("site"); err != nil || got.IsZero() {
+		t.Fatalf("UpdatedAt while locked = %v, %v; it reads a file time, not a secret", got, err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
+	// A save replaces the file, so the reported time has to move with it.
+	// Backdating makes the assertion exact instead of depending on how fine the
+	// filesystem's write clock is.
+	past := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	file := filepath.Join(a.storePath().Root(), "site.gpg")
+	if err := os.Chtimes(file, past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	if err := a.SavePassword("site", []byte("secret\nnotes\nedited\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	after, err := a.UpdatedAt("site")
+	if err != nil {
+		t.Fatalf("UpdatedAt: %v", err)
+	}
+	if !after.After(past) {
+		t.Fatalf("UpdatedAt = %v after a save; want it to advance past %v", after, past)
+	}
+}
+
+// TestUpdatedAtNoStore covers the lazy-open path: asking for a date before any
+// store has been opened must say so rather than panic or answer zero.
+func TestUpdatedAtNoStore(t *testing.T) {
+	a := newTestApp(t)
+	if _, err := a.UpdatedAt("site"); err == nil {
+		t.Fatal("expected UpdatedAt to fail without a store")
+	}
+}
+
 // TestStorePathConcurrentWithOpenLocalStore exercises the pairing the GUI
 // creates: Wails dispatches every binding call on its own goroutine, so a
 // config read (StorePath, bound to the settings panel) runs while a store

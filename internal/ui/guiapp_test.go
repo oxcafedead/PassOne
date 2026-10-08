@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -677,6 +678,31 @@ func TestCopyUsernameCopiesTheWholeLogin(t *testing.T) {
 	}
 	if err := g.CopyUsername("missing/entry"); err == nil {
 		t.Fatal("expected CopyUsername to fail for a missing entry")
+	}
+}
+
+// TestUpdatedAtIsARFC3339Timestamp pins the shape the renderer relies on: the
+// answer is an instant, not a pre-formatted date, so the UI can print it in the
+// viewer's own locale and timezone. It also works while the session is locked,
+// because a file's modification time is metadata like the file list.
+func TestUpdatedAtIsARFC3339Timestamp(t *testing.T) {
+	g, _ := setupUnlockedStore(t)
+	if _, err := g.CreatePassword("a/b", "line1", "line1", "body"); err != nil {
+		t.Fatalf("CreatePassword: %v", err)
+	}
+	got, err := g.UpdatedAt("a/b")
+	if err != nil {
+		t.Fatalf("UpdatedAt: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339, got); err != nil {
+		t.Fatalf("UpdatedAt = %q, which is not RFC 3339: %v", got, err)
+	}
+	if _, err := g.UpdatedAt("missing/entry"); err == nil {
+		t.Fatal("expected UpdatedAt of a missing entry to fail")
+	}
+	g.Lock()
+	if _, err := g.UpdatedAt("a/b"); err != nil {
+		t.Fatalf("UpdatedAt while locked = %v; it reads a file time, not a secret", err)
 	}
 }
 

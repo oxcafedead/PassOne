@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -842,6 +843,22 @@ func TestReleaseSmokeEntryFeatures(t *testing.T) {
 		}
 		if has {
 			t.Error("HasTOTP = true for an entry with no otpauth URI")
+		}
+	})
+
+	t.Run("UpdatedAtIsTheEntriesOwnTimestamp", func(t *testing.T) {
+		// GH #46. The detail pane prints this, so it has to arrive as an
+		// instant the renderer can localize, and a missing entry has to be
+		// reported rather than answered with a date nobody wrote.
+		got, err := v.app.UpdatedAt("github/personal")
+		if err != nil {
+			t.Fatalf("UpdatedAt: %v", err)
+		}
+		if _, err := time.Parse(time.RFC3339, got); err != nil {
+			t.Errorf("UpdatedAt = %q, which is not RFC 3339: %v", got, err)
+		}
+		if _, err := v.app.UpdatedAt("does/not/exist"); err == nil {
+			t.Error("UpdatedAt should fail for a missing entry")
 		}
 	})
 

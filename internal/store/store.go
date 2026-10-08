@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/oxcafedead/passone/internal/config"
 )
@@ -278,6 +279,26 @@ func (s *Store) Exists(p string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// ModTime reports when the password file for p was last written. The pass
+// format keeps no timestamp inside the file, so the encrypted file's own
+// modification time is the only record of when an entry changed: every save
+// replaces the file wholesale, and a rename carries the source file's times
+// over, so moving an entry does not pretend it was edited.
+func (s *Store) ModTime(p string) (time.Time, error) {
+	full, err := s.relSafe(p)
+	if err != nil {
+		return time.Time{}, err
+	}
+	info, err := os.Stat(full + ".gpg")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return time.Time{}, fmt.Errorf("password not found: %s", p)
+		}
+		return time.Time{}, err
+	}
+	return info.ModTime(), nil
 }
 
 // ValidateName returns a normalized virtual path for a new password.

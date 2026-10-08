@@ -88,6 +88,8 @@ export function Unlock(arg1:string):Promise<void>;
 
 export function UpdatePassword(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<string>;
 
+export function UpdatedAt(arg1:string):Promise<string>;
+
 export function Username(arg1:string):Promise<string>;
 
 export function UsernameSource():Promise<string>;

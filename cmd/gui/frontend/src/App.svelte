@@ -17,6 +17,7 @@
     ClipboardHistoryEnabled,
     CreatePassword,
     UpdatePassword,
+    UpdatedAt,
     MovePassword,
     RemovePassword,
     RevealPath,
@@ -130,6 +131,10 @@
   let totpAvailable: boolean = false
   let username: string = ''
   let hasUsername: boolean = false
+  // When the selected entry was last written, kept exactly as the backend
+  // reports it (RFC 3339) so the label below can be built in this locale and
+  // timezone instead of one the Go side happened to pick.
+  let updatedAt: string = ''
   let copying: boolean = false
   let copyingUsername: boolean = false
   let copyingTOTP: boolean = false
@@ -526,21 +531,29 @@
       totpAvailable = false
       username = ''
       hasUsername = false
+      updatedAt = ''
       return
     }
     selected = name
     detail = ''
     revealed = false
+    // Cleared rather than left showing the entry this one replaced: the probe
+    // below is a round trip, and a date belonging to another path is worse
+    // than no date for the length of it.
+    updatedAt = ''
     await probeSelected()
   }
 
   // probeSelected re-derives the TOTP presence and login of the selected entry
-  // by decrypting it in the backend only; nothing is shown to the user.
+  // by decrypting it in the backend only; nothing is shown to the user. The
+  // modification date is metadata rather than content, so it is read the same
+  // way and takes the same failure path: unknown, never guessed.
   async function probeSelected(): Promise<void> {
     if (!selected) {
       totpAvailable = false
       username = ''
       hasUsername = false
+      updatedAt = ''
       return
     }
     try {
@@ -555,6 +568,23 @@
       username = ''
       hasUsername = false
     }
+    try {
+      updatedAt = (await UpdatedAt(selected)) ?? ''
+    } catch (_) {
+      updatedAt = ''
+    }
+  }
+
+  // updatedLabel renders the RFC 3339 instant the backend reports as a local
+  // date and time, in whatever locale this machine is set to. Anything that is
+  // not a parseable instant renders as nothing, because a label saying "now"
+  // would be a claim about an entry whose date the backend did not give.
+  function updatedLabel(iso: string): string {
+    const at = new Date(iso)
+    if (Number.isNaN(at.getTime())) {
+      return ''
+    }
+    return at.toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'})
   }
 
   // reveal decrypts only the selected entry and renders it. This is the single
@@ -587,6 +617,11 @@
   // even before the entry's content is revealed. Once revealed, the printed
   // body is authoritative as a fallback.
   $: totpVisible = totpAvailable || (revealed && hasTOTP(detail))
+
+  // The entry's last-written date, formatted once here rather than in the
+  // markup so a value that is not a real instant renders as nothing instead of
+  // as an invalid date.
+  $: updatedStamp = updatedLabel(updatedAt)
 
   // The three parameters are `string | null` because `selected` is, and it is
   // only null with no entry selected -- which is the one state in which none of
@@ -1757,6 +1792,12 @@
         -->
         <header class="flex flex-wrap items-center gap-2">
           <h2 class="text-main min-w-0 basis-full truncate font-mono text-sm font-medium">{selected}</h2>
+          {#if updatedStamp}
+            <span
+              data-testid="updated-at"
+              class="shrink-0 whitespace-nowrap text-xs text-faint"
+            >Updated {updatedStamp}</span>
+          {/if}
           {#if copiedUsernameName === selected}
             <span class="badge-success shrink-0 whitespace-nowrap rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>Username · clears in {copiedUsernameRemaining}s</span>
           {/if}

@@ -29,6 +29,7 @@ const {
   ShowPassword,
   Unlock,
   UpdatePassword,
+  UpdatedAt,
   Username,
 } = bridge
 
@@ -356,6 +357,41 @@ describe('entry detail', () => {
     await fireEvent.click(screen.getByRole('button', {name: /Copy/}))
 
     await waitFor(() => expect(CopyPassword).toHaveBeenCalledWith('github/personal'))
+  })
+
+  // GH #46. The pane says how stale the entry is, from the probe taken when it
+  // was selected and before anything is revealed. What is asserted is the
+  // wiring rather than the wording: the label carries the instant the backend
+  // answered with, is built for this locale (so only the year is checked), and
+  // is dropped again when the selection is — a date left behind under another
+  // path would be a worse answer than none.
+  it('shows when the entry was last updated, and drops it on deselect', async () => {
+    UpdatedAt.mockResolvedValue('2026-10-05T14:32:00Z')
+    vault()
+    render(App)
+    await selectEntry()
+
+    const label = await screen.findByTestId('updated-at')
+    expect(UpdatedAt).toHaveBeenCalledWith('github/personal')
+    expect(label).toHaveTextContent(/^Updated/)
+    expect(label).toHaveTextContent('2026')
+    // It shares the row with the actions (GH #41), so it obeys their rule
+    // too: an item that can shrink or wrap takes the width back off the
+    // buttons the row exists to hold.
+    expect(label.className).toContain('shrink-0')
+    expect(label.className).toContain('whitespace-nowrap')
+
+    await fireEvent.click(screen.getByTitle('github/personal'))
+    expect(screen.queryByTestId('updated-at')).toBeNull()
+  })
+
+  it('shows no date at all when the backend has none', async () => {
+    vault()
+    render(App)
+    await selectEntry()
+    await probeSettled()
+
+    expect(screen.queryByTestId('updated-at')).toBeNull()
   })
 })
 

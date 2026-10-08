@@ -7,8 +7,8 @@
 // here rather than passing against a stand-in.
 import {vi, type Mock} from 'vitest'
 
-// Default behaviour, so the component renders without configuring all 38
-// bindings per test. CurrentSettings describes a fully configured store, which
+// Default behaviour, so the component renders without configuring every binding
+// per test. CurrentSettings describes a fully configured store, which
 // stops openSettingsIfFirstRun from opening the onboarding wizard over the top
 // of every test.
 const defaults = {
@@ -30,6 +30,10 @@ const defaults = {
   CopyTOTP: async () => undefined,
   HasTOTP: async () => false,
   Username: async () => '',
+  // No date by default: a test that cares about the label sets a real
+  // instant, and one that does not gets the "unknown" state rather than a
+  // timestamp that would render as if the entry had just been saved.
+  UpdatedAt: async () => '',
   ClipboardClearSeconds: async () => 0,
   ClipboardHistoryEnabled: async () => false,
   CreatePassword: async () => 'Created',

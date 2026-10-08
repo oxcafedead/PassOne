@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreateAndOpen(t *testing.T) {
@@ -467,6 +468,76 @@ func TestExistsAndDelete(t *testing.T) {
 	}
 	if err := st.Delete("present"); err == nil {
 		t.Fatal("expected Delete of missing file to report error")
+	}
+}
+
+// TestModTime pins the one place a "last updated" date can come from: the pass
+// format carries no timestamp, so the answer is the encrypted file's mtime. A
+// save has to move it forward, a rename has to leave it alone, and a missing
+// entry has to be reported rather than answered with the zero time.
+func TestModTime(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Create(dir, []string{"AA"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := st.ModTime("missing"); err == nil {
+		t.Fatal("expected ModTime of a missing password to fail")
+	}
+	if _, err := st.ModTime("../escape"); err == nil {
+		t.Fatal("expected ModTime of an escaping path to fail")
+	}
+	if err := st.WriteEncrypted("github/personal", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	first, err := st.ModTime("github/personal")
+	if err != nil {
+		t.Fatalf("ModTime: %v", err)
+	}
+	if first.IsZero() {
+		t.Fatal("ModTime returned the zero time")
+	}
+	// Backdate the file, then save again: the new ciphertext replaces the file
+	// wholesale, so the reported time must be the save's, not the old one's.
+	// Truncated so the round trip through the filesystem's own resolution
+	// (100ns on NTFS, seconds on some network shares) is exact.
+	past := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	full := filepath.Join(dir, "github", "personal.gpg")
+	if err := os.Chtimes(full, past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	if backdated, err := st.ModTime("github/personal"); err != nil || !backdated.Equal(past) {
+		t.Fatalf("ModTime after Chtimes = %v, %v; want %v", backdated, err, past)
+	}
+	if err := st.WriteEncrypted("github/personal", []byte("CIPHER2")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	second, err := st.ModTime("github/personal")
+	if err != nil {
+		t.Fatalf("ModTime: %v", err)
+	}
+	if !second.After(past) {
+		t.Fatalf("ModTime = %v, want it to advance past the backdated %v", second, past)
+	}
+
+	// A rename is not an edit: the entry moves, the file it moves is the same
+	// file, and the date it shows must not change.
+	moved, err := st.ModTime("github/personal")
+	if err != nil {
+		t.Fatalf("ModTime: %v", err)
+	}
+	if err := st.Move("github/personal", "work/personal"); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	afterMove, err := st.ModTime("work/personal")
+	if err != nil {
+		t.Fatalf("ModTime after move: %v", err)
+	}
+	if !afterMove.Equal(moved) {
+		t.Errorf("ModTime after Move = %v, want the entry's own %v", afterMove, moved)
+	}
+	if _, err := st.ModTime("github/personal"); err == nil {
+		t.Error("expected ModTime of the vacated path to fail")
 	}
 }
 

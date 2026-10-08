@@ -859,6 +859,22 @@ func (a *App) HasTOTP(name string) (bool, error) {
 	return false, err
 }
 
+// UpdatedAt reports when the named entry was last written to the store. It
+// decrypts nothing and needs no unlocked session: the answer is the encrypted
+// file's own modification time, which is also the only timestamp the pass
+// format keeps — there is no header to carry one and no sidecar to maintain.
+// An entry that does not exist is an error rather than the zero time.
+func (a *App) UpdatedAt(name string) (time.Time, error) {
+	if err := a.ensureStoreOpen(); err != nil {
+		return time.Time{}, err
+	}
+	st := a.storePath()
+	if st == nil {
+		return time.Time{}, errors.New("no password store is open; use 'open' or 'clone' first")
+	}
+	return st.ModTime(name)
+}
+
 // UsernameSource returns the configured login extraction mode
 // (auto, body or filename).
 func (a *App) UsernameSource() string {

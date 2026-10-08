@@ -156,6 +156,9 @@ func TestAppPassThroughMethods(t *testing.T) {
 	if _, err := a.HasTOTP("x"); err == nil {
 		t.Fatal("expected HasTOTP without store to fail")
 	}
+	if _, err := a.UpdatedAt("x"); err == nil {
+		t.Fatal("expected UpdatedAt without store to fail")
+	}
 	_ = a.ClipboardClearSeconds()
 	_ = a.ClipboardHistoryEnabled()
 	if a.UsernameSource() != "auto" {

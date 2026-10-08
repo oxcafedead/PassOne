@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
@@ -364,6 +365,19 @@ func (g *GUI) CopyTOTP(name string) (string, error) {
 // content is shown; no plaintext reaches the frontend.
 func (g *GUI) HasTOTP(name string) (bool, error) {
 	return g.core.HasTOTP(name)
+}
+
+// UpdatedAt reports when the named entry was last written, as an RFC 3339
+// timestamp the renderer turns into a local date. It needs no unlock and
+// decrypts nothing: the answer is the encrypted file's own modification time,
+// so an entry that moved is shown with the date it earned where it stood, not
+// the date of the rename. A missing entry is an error, not an empty answer.
+func (g *GUI) UpdatedAt(name string) (string, error) {
+	t, err := g.core.UpdatedAt(name)
+	if err != nil {
+		return "", err
+	}
+	return t.Format(time.RFC3339), nil
 }
 
 // UsernameSource returns the configured login extraction mode

@@ -83,6 +83,10 @@ func (a *App) Username(name string) (string, error) { return a.gui.Username(name
 // is displayed.
 func (a *App) HasTOTP(name string) (bool, error) { return a.gui.HasTOTP(name) }
 
+// UpdatedAt returns when an entry was last written, as an RFC 3339 timestamp,
+// so the detail pane can say how stale the secret on screen is.
+func (a *App) UpdatedAt(name string) (string, error) { return a.gui.UpdatedAt(name) }
+
 // UsernameSource returns the configured login extraction mode.
 func (a *App) UsernameSource() string { return a.gui.UsernameSource() }
 
