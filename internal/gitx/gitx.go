@@ -30,6 +30,11 @@ var ErrUpToDate = errors.New("already up to date")
 // a failure.
 var ErrRemoteEmpty = errors.New("the remote repository is empty")
 
+// ErrNoHistory is returned by LastModified when no commit in the repository
+// touches the queried path: a repository with no commits at all, or a file
+// written to the working tree and not committed yet.
+var ErrNoHistory = errors.New("no commit touches that path")
+
 // Signer wraps the application SSH key for use by go-git.
 type Signer interface {
 	Signer() ssh.Signer
@@ -309,6 +314,261 @@ func HasCommits(dir string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// LastModified reports when the newest commit that touches path was authored.
+//
+// The date comes from the commit, not from the working tree: a clone, a pull or
+// a checkout writes every file with the time of that checkout, so a file's own
+// modification time answers "when did this file appear on this machine", while
+// the commit answers "when was this entry actually changed". Author time is used
+// rather than committer time because a rebase rewrites the latter and would
+// restate every entry as having changed at rebase time.
+//
+// A move is a commit of its own (Move <from> to <to>), and it touches both the old and
+// the new path, so an entry that was moved is reported as updated when it moved:
+// the store records the move. A path with no commit of its own - an empty
+// repository, or an entry written but not committed yet - returns ErrNoHistory
+// so the caller can fall back to the working tree rather than invent a date.
+//
+// The walk follows the first parent and compares the blob hash of path at each
+// commit with the hash at its parent, stopping at the first pair that differs.
+// That is what `git log -- <path>` computes, done in one path lookup per commit
+// instead of a diff of the two whole trees. The diff form is what made this cost
+// grow with the number of entries in the store as well as the number of commits:
+// an old entry in a large store walked every commit and re-diffed the entire
+// tree at each one.
+func LastModified(dir, path string) (time.Time, error) {
+	repo, err := Open(dir)
+	if err != nil {
+		return time.Time{}, err
+	}
+	head, err := repo.Head()
+	if err != nil {
+		// An unborn HEAD has no commits to walk.
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return time.Time{}, ErrNoHistory
+		}
+		return time.Time{}, err
+	}
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		return time.Time{}, err
+	}
+	for {
+		parent, err := firstParent(repo, commit)
+		if err != nil {
+			return time.Time{}, err
+		}
+		changed, err := pathTouched(commit, parent, path)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if changed {
+			return commit.Author.When, nil
+		}
+		if parent == nil {
+			return time.Time{}, ErrNoHistory
+		}
+		commit = parent
+	}
+}
+
+// firstParent returns the commit's first parent, or nil at the root. A store's
+// history is linear - every save is one commit on the branch - so the first
+// parent is the previous state of the whole store.
+func firstParent(repo *goGit.Repository, commit *object.Commit) (*object.Commit, error) {
+	if len(commit.ParentHashes) == 0 {
+		return nil, nil
+	}
+	return repo.CommitObject(commit.ParentHashes[0])
+}
+
+// pathTouched reports whether commit changed path relative to parent. With a nil
+// parent it reports whether the file is present at all, i.e. whether the root
+// commit is the one that introduced it.
+func pathTouched(commit, parent *object.Commit, path string) (bool, error) {
+	now, nowThere, err := blobAt(commit, path)
+	if err != nil {
+		return false, err
+	}
+	if parent == nil {
+		return nowThere, nil
+	}
+	before, beforeThere, err := blobAt(parent, path)
+	if err != nil {
+		return false, err
+	}
+	return nowThere != beforeThere || (nowThere && now != before), nil
+}
+
+// blobAt returns the hash of path's blob in commit's tree and whether the path
+// is there at all. A missing path is not an error: most commits do not touch the
+// path being looked up.
+func blobAt(commit *object.Commit, path string) (plumbing.Hash, bool, error) {
+	file, err := commit.File(path)
+	if err != nil {
+		if errors.Is(err, object.ErrFileNotFound) {
+			return plumbing.ZeroHash, false, nil
+		}
+		return plumbing.ZeroHash, false, err
+	}
+	return file.Hash, true, nil
+}
+
+// Head returns the branch head commit's hash as a string, or ErrNoHistory when
+// the repository has no commits yet. A caller that caches per-path dates uses it
+// as the key: the branch moving is what can change any date, and nothing else.
+func Head(dir string) (string, error) {
+	repo, err := Open(dir)
+	if err != nil {
+		return "", err
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return "", ErrNoHistory
+		}
+		return "", err
+	}
+	return ref.Hash().String(), nil
+}
+
+// ModifiedTimes returns, for every path that exists at HEAD, the author time of
+// the newest commit that touched it, together with the head commit those times
+// were read from.
+//
+// It walks the first-parent history once and diffs each commit against its
+// parent, so a single walk answers the question for the whole store. That is the
+// reason it exists next to LastModified: LastModified answers for one path and
+// pays for the walk each time, which a UI that shows the date of whatever entry
+// is selected pays again on every selection. The head is returned so a caller
+// can cache the map and rebuild it only when the branch has actually moved.
+func ModifiedTimes(dir string) (map[string]time.Time, string, error) {
+	repo, err := Open(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	head, err := repo.Head()
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return nil, "", ErrNoHistory
+		}
+		return nil, "", err
+	}
+	headCommit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		return nil, "", err
+	}
+	present, err := pathsAt(headCommit)
+	if err != nil {
+		return nil, "", err
+	}
+	times := make(map[string]time.Time)
+	commit := headCommit
+	for {
+		parent, err := firstParent(repo, commit)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := recordTouchedPaths(times, present, commit, parent); err != nil {
+			return nil, "", err
+		}
+		if parent == nil {
+			break
+		}
+		commit = parent
+	}
+	return times, head.Hash().String(), nil
+}
+
+// pathsAt returns the set of paths that exist in the commit's tree. Only paths
+// in this set are reported by ModifiedTimes: a caller asks about entries it can
+// select, and those are the files at HEAD, not the ones history left behind.
+func pathsAt(commit *object.Commit) (map[string]bool, error) {
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool)
+	files := tree.Files()
+	defer files.Close()
+	err = files.ForEach(func(f *object.File) error {
+		out[f.Name] = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// recordTouchedPaths adds every path present at HEAD that commit changed
+// relative to parent to times, keeping the first time seen, which is the newest
+// because the walk starts at HEAD. A nil parent is the root commit, whose whole
+// tree counts as added.
+func recordTouchedPaths(times map[string]time.Time, present map[string]bool, commit, parent *object.Commit) error {
+	if parent == nil {
+		return recordTreePaths(times, present, commit)
+	}
+	changed, err := diffTouchedPaths(commit, parent)
+	if err != nil {
+		return err
+	}
+	when := commit.Author.When
+	for _, name := range changed {
+		if !present[name] {
+			continue
+		}
+		if _, ok := times[name]; !ok {
+			times[name] = when
+		}
+	}
+	return nil
+}
+
+// recordTreePaths records every path of a root commit's whole tree.
+func recordTreePaths(times map[string]time.Time, present map[string]bool, commit *object.Commit) error {
+	tree, err := commit.Tree()
+	if err != nil {
+		return err
+	}
+	when := commit.Author.When
+	files := tree.Files()
+	defer files.Close()
+	return files.ForEach(func(f *object.File) error {
+		if present[f.Name] {
+			if _, ok := times[f.Name]; !ok {
+				times[f.Name] = when
+			}
+		}
+		return nil
+	})
+}
+
+// diffTouchedPaths returns the paths commit added or changed relative to parent.
+// A deletion has no To entry and is left out: a path gone from HEAD is not one
+// anyone can ask about.
+func diffTouchedPaths(commit, parent *object.Commit) ([]string, error) {
+	commitTree, err := commit.Tree()
+	if err != nil {
+		return nil, err
+	}
+	parentTree, err := parent.Tree()
+	if err != nil {
+		return nil, err
+	}
+	changes, err := object.DiffTree(parentTree, commitTree)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(changes))
+	for _, ch := range changes {
+		if ch.To.Name != "" {
+			names = append(names, ch.To.Name)
+		}
+	}
+	return names, nil
 }
 
 // HasRemoteBranch reports whether the origin remote already carries a branch of

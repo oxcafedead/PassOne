@@ -367,11 +367,13 @@ func (g *GUI) HasTOTP(name string) (bool, error) {
 	return g.core.HasTOTP(name)
 }
 
-// UpdatedAt reports when the named entry was last written, as an RFC 3339
+// UpdatedAt reports when the named entry was last changed, as an RFC 3339
 // timestamp the renderer turns into a local date. It needs no unlock and
-// decrypts nothing: the answer is the encrypted file's own modification time,
-// so an entry that moved is shown with the date it earned where it stood, not
-// the date of the rename. A missing entry is an error, not an empty answer.
+// decrypts nothing: the answer is the author time of the newest git commit that
+// touches the entry, which is the change's real record and survives a clone or
+// a checkout. A store with no git history, or an entry not yet committed, falls
+// back to the file's own modification time. A missing entry is an error, not an
+// empty answer.
 func (g *GUI) UpdatedAt(name string) (string, error) {
 	t, err := g.core.UpdatedAt(name)
 	if err != nil {

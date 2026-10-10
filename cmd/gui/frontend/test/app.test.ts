@@ -375,11 +375,11 @@ describe('entry detail', () => {
     expect(UpdatedAt).toHaveBeenCalledWith('github/personal')
     expect(label).toHaveTextContent(/^Updated/)
     expect(label).toHaveTextContent('2026')
-    // It shares the row with the actions (GH #41), so it obeys their rule
-    // too: an item that can shrink or wrap takes the width back off the
-    // buttons the row exists to hold.
-    expect(label.className).toContain('shrink-0')
-    expect(label.className).toContain('whitespace-nowrap')
+    // GH #46: the date is metadata about the entry, not one of its actions, so
+    // it lives under the content and is the last thing in the pane — it is
+    // never an item the actions row (GH #41) has to wrap around.
+    expect(label.closest('header')).toBeNull()
+    expect(label.parentElement?.lastElementChild).toBe(label)
 
     await fireEvent.click(screen.getByTitle('github/personal'))
     expect(screen.queryByTestId('updated-at')).toBeNull()
@@ -392,6 +392,41 @@ describe('entry detail', () => {
     await probeSettled()
 
     expect(screen.queryByTestId('updated-at')).toBeNull()
+  })
+
+  it('keeps the new date when the entry just left answers late', async () => {
+    // The probe is three round trips and the selection can move on between
+    // them, so a date fetched for one entry can land after the user has opened
+    // another. It must do neither of the two things an unguarded write did:
+    // print the abandoned entry's date under the new one, or blank the new
+    // entry's date the moment it appeared.
+    vault()
+    ListPasswords.mockResolvedValue(['github/personal', 'gitlab/work'])
+    const first = deferred<string>()
+    const second = deferred<string>()
+    UpdatedAt.mockImplementation((name: string) =>
+      name === 'github/personal' ? first.promise : second.promise,
+    )
+    render(App)
+    await selectEntry('github/personal')
+    // Park the first entry's probe on its date fetch before moving on, so the
+    // late answer is the one the test is about.
+    await waitFor(() => expect(UpdatedAt).toHaveBeenCalledWith('github/personal'))
+
+    await fireEvent.click(screen.getByTitle('gitlab/work'))
+    await screen.findByRole('heading', {level: 2, name: 'gitlab/work'})
+
+    second.resolve('2026-10-05T14:32:00Z')
+    const label = await screen.findByTestId('updated-at')
+    expect(label).toHaveTextContent('2026')
+
+    first.resolve('2001-01-01T00:00:00Z')
+    // A macrotask, not tick(): the abandoned probe's write and Svelte's own
+    // flush are microtasks, so waiting on them is what lets the stale value
+    // reach the DOM before the assertion. Waiting on only the tick that happens
+    // first would read the label before the write it is testing for.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByTestId('updated-at')).toHaveTextContent('2026')
   })
 })
 

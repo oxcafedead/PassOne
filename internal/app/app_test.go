@@ -2896,6 +2896,25 @@ func unlockWithStore(t *testing.T) *App {
 	return a
 }
 
+// unlockWithGitStore is unlockWithStore with a git-backed store, so updates made
+// through the App are committed and carry a history to read dates back out of.
+func unlockWithGitStore(t *testing.T) *App {
+	t.Helper()
+	a := newTestApp(t)
+	armored := armoredTestKey(t)
+	if _, err := a.ImportPGPKey(armored, []byte(testPGPPassphrase), []byte(testLockPass)); err != nil {
+		t.Fatalf("ImportPGPKey: %v", err)
+	}
+	storeDir := filepath.Join(t.TempDir(), "pass")
+	if err := a.CreateStore(storeDir, ""); err != nil {
+		t.Fatalf("CreateStore: %v", err)
+	}
+	if err := a.Unlock([]byte(testLockPass)); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	return a
+}
+
 func TestNotes(t *testing.T) {
 	a := unlockWithStore(t)
 
@@ -3102,6 +3121,110 @@ func TestUpdatedAtNoStore(t *testing.T) {
 	a := newTestApp(t)
 	if _, err := a.UpdatedAt("site"); err == nil {
 		t.Fatal("expected UpdatedAt to fail without a store")
+	}
+}
+
+// TestUpdatedAtComesFromGitNotTheFileTime pins the point of reading git history:
+// a clone, pull or checkout stamps every file with the moment it ran, so the
+// working tree's time is not the edit's time even though it is the most recent
+// thing on disk.
+func TestUpdatedAtComesFromGitNotTheFileTime(t *testing.T) {
+	a := unlockWithGitStore(t)
+	if err := a.SavePassword("site", []byte("secret\nnotes\n")); err != nil {
+		t.Fatalf("SavePassword: %v", err)
+	}
+	root := a.storePath().Root()
+	future := time.Now().Add(48 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(filepath.Join(root, "site.gpg"), future, future); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	got, err := a.UpdatedAt("site")
+	if err != nil {
+		t.Fatalf("UpdatedAt: %v", err)
+	}
+	if got.IsZero() {
+		t.Fatal("UpdatedAt returned the zero time")
+	}
+	if !got.Before(future) {
+		t.Fatalf("UpdatedAt = %v; it followed the file's mtime (%v) instead of the commit", got, future)
+	}
+	want, err := gitx.LastModified(root, "site.gpg")
+	if err != nil {
+		t.Fatalf("gitx.LastModified: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("UpdatedAt = %v, want the commit's author time %v", got, want)
+	}
+}
+
+// TestUpdatedAtFallsBackForAnUncommittedEntry covers the entry git cannot speak
+// for: written to the working tree, not committed. Its own modification time is
+// the only record there is, and the file's existence still has to be checked.
+func TestUpdatedAtFallsBackForAnUncommittedEntry(t *testing.T) {
+	a := unlockWithGitStore(t)
+	st := a.storePath()
+	if err := st.WriteEncrypted("loose", []byte("CIPHER")); err != nil {
+		t.Fatalf("WriteEncrypted: %v", err)
+	}
+	if _, err := gitx.LastModified(st.Root(), "loose.gpg"); !errors.Is(err, gitx.ErrNoHistory) {
+		t.Fatalf("expected no git history for an uncommitted file, got %v", err)
+	}
+
+	got, err := a.UpdatedAt("loose")
+	if err != nil {
+		t.Fatalf("UpdatedAt: %v", err)
+	}
+	want, err := st.ModTime("loose")
+	if err != nil {
+		t.Fatalf("ModTime: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("UpdatedAt = %v, want the file's own time %v when git has no commit", got, want)
+	}
+}
+
+// TestUpdatedAtRefreshesItsCacheWhenTheBranchMoves pins that the cached
+// path->time map is invalidated by a new commit. The cache exists to keep the
+// per-selection cost a map lookup instead of a history walk, so the one way it
+// can go wrong is serving a date from before the edit that changed it.
+func TestUpdatedAtRefreshesItsCacheWhenTheBranchMoves(t *testing.T) {
+	a := unlockWithGitStore(t)
+	if err := a.SavePassword("first", []byte("secret\nnotes\n")); err != nil {
+		t.Fatalf("SavePassword(first): %v", err)
+	}
+	if err := a.SavePassword("second", []byte("secret\nnotes\n")); err != nil {
+		t.Fatalf("SavePassword(second): %v", err)
+	}
+	firstBefore, err := a.UpdatedAt("first")
+	if err != nil {
+		t.Fatalf("UpdatedAt(first): %v", err)
+	}
+	secondBefore, err := a.UpdatedAt("second")
+	if err != nil {
+		t.Fatalf("UpdatedAt(second): %v", err)
+	}
+
+	// Commit times have second resolution, so the commit that follows has to land
+	// in a different second for this to prove the refresh happened.
+	time.Sleep(1100 * time.Millisecond)
+	if err := a.SavePassword("first", []byte("changed\nnotes\n")); err != nil {
+		t.Fatalf("SavePassword(first) again: %v", err)
+	}
+
+	firstAfter, err := a.UpdatedAt("first")
+	if err != nil {
+		t.Fatalf("UpdatedAt(first) again: %v", err)
+	}
+	if !firstAfter.After(firstBefore) {
+		t.Fatalf("UpdatedAt(first) = %v, want it refreshed past the pre-edit %v", firstAfter, firstBefore)
+	}
+	secondAfter, err := a.UpdatedAt("second")
+	if err != nil {
+		t.Fatalf("UpdatedAt(second) again: %v", err)
+	}
+	if !secondAfter.Equal(secondBefore) {
+		t.Fatalf("UpdatedAt(second) = %v, want its own commit time %v unchanged", secondAfter, secondBefore)
 	}
 }
 

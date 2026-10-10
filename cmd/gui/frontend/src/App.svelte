@@ -548,8 +548,17 @@
   // by decrypting it in the backend only; nothing is shown to the user. The
   // modification date is metadata rather than content, so it is read the same
   // way and takes the same failure path: unknown, never guessed.
+  //
+  // Each answer is written only if the entry it was asked about is still the
+  // selected one. The reads are three round trips, and the selection can move on
+  // while they are in flight, so an unguarded write lets a probe for the entry
+  // the user just left land on top of the entry they moved to — a stale date, or
+  // a stale failure that blanks the new entry's date the moment it appears. The
+  // name is captured once for the same reason: reading `selected` again after an
+  // await would mix a TOTP answer for one entry with a username for another.
   async function probeSelected(): Promise<void> {
-    if (!selected) {
+    const name = selected
+    if (!name) {
       totpAvailable = false
       username = ''
       hasUsername = false
@@ -557,21 +566,36 @@
       return
     }
     try {
-      totpAvailable = (await HasTOTP(selected)) ?? false
+      const available = (await HasTOTP(name)) ?? false
+      if (selected === name) {
+        totpAvailable = available
+      }
     } catch (_) {
-      totpAvailable = false
+      if (selected === name) {
+        totpAvailable = false
+      }
     }
     try {
-      username = (await Username(selected)) ?? ''
-      hasUsername = username !== ''
+      const login = (await Username(name)) ?? ''
+      if (selected === name) {
+        username = login
+        hasUsername = login !== ''
+      }
     } catch (_) {
-      username = ''
-      hasUsername = false
+      if (selected === name) {
+        username = ''
+        hasUsername = false
+      }
     }
     try {
-      updatedAt = (await UpdatedAt(selected)) ?? ''
+      const stale = (await UpdatedAt(name)) ?? ''
+      if (selected === name) {
+        updatedAt = stale
+      }
     } catch (_) {
-      updatedAt = ''
+      if (selected === name) {
+        updatedAt = ''
+      }
     }
   }
 
@@ -1792,12 +1816,6 @@
         -->
         <header class="flex flex-wrap items-center gap-2">
           <h2 class="text-main min-w-0 basis-full truncate font-mono text-sm font-medium">{selected}</h2>
-          {#if updatedStamp}
-            <span
-              data-testid="updated-at"
-              class="shrink-0 whitespace-nowrap text-xs text-faint"
-            >Updated {updatedStamp}</span>
-          {/if}
           {#if copiedUsernameName === selected}
             <span class="badge-success shrink-0 whitespace-nowrap rounded-md px-2 py-1 text-xs" title={copyBadgeTitle()}>Username · clears in {copiedUsernameRemaining}s</span>
           {/if}
@@ -1909,6 +1927,16 @@
               Show password
             </button>
           </div>
+        {/if}
+        <!--
+          The date sits under the content, not in the header: it is metadata
+          about the entry rather than one of its actions, and a line of its own
+          at the bottom is where it costs the buttons nothing. The pane is a
+          column and the content above it is flex-1, so this is the last thing
+          on the screen either way — revealed or still locked.
+        -->
+        {#if updatedStamp}
+          <p class="text-faint shrink-0 text-xs" data-testid="updated-at">Updated {updatedStamp}</p>
         {/if}
       {:else}
         <div class="text-dim flex flex-1 items-center justify-center text-sm">Select an entry to view it</div>

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	goGit "github.com/go-git/go-git/v5"
 	goGitConfig "github.com/go-git/go-git/v5/config"
@@ -1051,5 +1052,201 @@ func TestCurrentBranchDetached(t *testing.T) {
 	}
 	if _, err := CurrentBranch(work); err == nil {
 		t.Fatal("expected CurrentBranch in detached HEAD to fail")
+	}
+}
+
+// commitFile writes name and commits it, returning the new commit's hash.
+func commitFile(t *testing.T, dir, name, content, message string) string {
+	t.Helper()
+	if err := writeRel(dir, name, content); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	if err := Add(dir, name); err != nil {
+		t.Fatalf("Add %s: %v", name, err)
+	}
+	h, err := Commit(dir, message, "Tester", "tester@example.com")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	return h
+}
+
+// commitAuthorTime reads the author time back out of the named commit, so a test
+// can compare against the commit object itself instead of racing the wall clock.
+func commitAuthorTime(t *testing.T, dir, hash string) time.Time {
+	t.Helper()
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	commit, err := repo.CommitObject(plumbing.NewHash(hash))
+	if err != nil {
+		t.Fatalf("CommitObject %s: %v", hash, err)
+	}
+	return commit.Author.When
+}
+
+// TestLastModifiedIgnoresTheWorkingTreeTime is the reason LastModified exists:
+// a clone, pull or checkout rewrites every file with the time it ran, so the
+// file's own modification time says when the file arrived, not when the entry
+// was changed. The commit is unmoved by any of that.
+func TestLastModifiedIgnoresTheWorkingTreeTime(t *testing.T) {
+	dir := t.TempDir()
+	if err := Init(dir, ""); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	h := commitFile(t, dir, "site.gpg", "CIPHER", "Save site")
+	want := commitAuthorTime(t, dir, h)
+
+	future := time.Now().Add(48 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "site.gpg"), future, future); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	got, err := LastModified(dir, "site.gpg")
+	if err != nil {
+		t.Fatalf("LastModified: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("LastModified = %v, want the commit's author time %v (the file was set to %v)", got, want, future)
+	}
+}
+
+func TestLastModifiedIsTheNewestCommitTouchingThePath(t *testing.T) {
+	dir := t.TempDir()
+	if err := Init(dir, ""); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	site := commitFile(t, dir, "site.gpg", "CIPHER", "Save site")
+
+	// git records commit times to the second, so the two commits have to fall in
+	// different seconds for "the newest touching the path" to be distinguishable
+	// from "the newest commit, full stop".
+	time.Sleep(1100 * time.Millisecond)
+	other := commitFile(t, dir, "other.gpg", "CIPHER", "Save other")
+
+	wantSite := commitAuthorTime(t, dir, site)
+	wantOther := commitAuthorTime(t, dir, other)
+
+	gotSite, err := LastModified(dir, "site.gpg")
+	if err != nil {
+		t.Fatalf("LastModified(site.gpg): %v", err)
+	}
+	if !gotSite.Equal(wantSite) {
+		t.Fatalf("LastModified(site.gpg) = %v, want its own commit %v, not the later %v", gotSite, wantSite, wantOther)
+	}
+	gotOther, err := LastModified(dir, "other.gpg")
+	if err != nil {
+		t.Fatalf("LastModified(other.gpg): %v", err)
+	}
+	if !gotOther.Equal(wantOther) {
+		t.Fatalf("LastModified(other.gpg) = %v, want %v", gotOther, wantOther)
+	}
+}
+
+func TestLastModifiedWithoutHistory(t *testing.T) {
+	dir := t.TempDir()
+	if err := Init(dir, ""); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if _, err := LastModified(dir, "site.gpg"); !errors.Is(err, ErrNoHistory) {
+		t.Fatalf("LastModified on a repository with no commits = %v, want ErrNoHistory", err)
+	}
+
+	commitFile(t, dir, "other.gpg", "CIPHER", "Save other")
+	if _, err := LastModified(dir, "site.gpg"); !errors.Is(err, ErrNoHistory) {
+		t.Fatalf("LastModified for a path no commit touches = %v, want ErrNoHistory", err)
+	}
+
+	if err := writeRel(dir, "staged.gpg", "CIPHER"); err != nil {
+		t.Fatalf("writeRel: %v", err)
+	}
+	if _, err := LastModified(dir, "staged.gpg"); !errors.Is(err, ErrNoHistory) {
+		t.Fatalf("LastModified for a working-tree-only file = %v, want ErrNoHistory", err)
+	}
+}
+
+func TestLastModifiedNotARepository(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeRel(dir, "site.gpg", "CIPHER"); err != nil {
+		t.Fatalf("writeRel: %v", err)
+	}
+	if _, err := LastModified(dir, "site.gpg"); err == nil {
+		t.Fatal("expected LastModified outside a repository to fail")
+	} else if errors.Is(err, ErrNoHistory) {
+		t.Fatal("a missing repository is an error, not an absence of history")
+	}
+}
+
+// TestModifiedTimesAnswersForEveryPathInOneWalk pins the reason ModifiedTimes
+// exists next to LastModified: a single walk yields the newest-commit time of
+// every path, so a caller pays for the whole history once instead of once per
+// entry it shows. The map has to agree with LastModified path by path, and the
+// returned head has to be the one those times were read from.
+func TestModifiedTimesAnswersForEveryPathInOneWalk(t *testing.T) {
+	dir := t.TempDir()
+	if err := Init(dir, ""); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	site := commitFile(t, dir, "site.gpg", "CIPHER", "Save site")
+	time.Sleep(1100 * time.Millisecond)
+	deep := commitFile(t, dir, "folder/deep.gpg", "CIPHER", "Save deep")
+
+	times, head, err := ModifiedTimes(dir)
+	if err != nil {
+		t.Fatalf("ModifiedTimes: %v", err)
+	}
+	wantSite := commitAuthorTime(t, dir, site)
+	wantDeep := commitAuthorTime(t, dir, deep)
+	if got := times["site.gpg"]; !got.Equal(wantSite) {
+		t.Fatalf("times[site.gpg] = %v, want %v", got, wantSite)
+	}
+	if got := times["folder/deep.gpg"]; !got.Equal(wantDeep) {
+		t.Fatalf("times[folder/deep.gpg] = %v, want %v", got, wantDeep)
+	}
+
+	wantHead, err := Head(dir)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if head != wantHead {
+		t.Fatalf("ModifiedTimes head = %s, want Head() = %s", head, wantHead)
+	}
+}
+
+// TestModifiedTimesOmitsPathsThatCannotBeAsked pins the two absences the caller
+// relies on: a path that only exists in the working tree (no commit to ask
+// about) and a path deleted at HEAD (not something a detail view can select)
+// are both missing from the map. An empty repository reports ErrNoHistory rather
+// than an empty map, so "no dates yet" is not confused with "every date found".
+func TestModifiedTimesOmitsPathsThatCannotBeAsked(t *testing.T) {
+	dir := t.TempDir()
+	if err := Init(dir, ""); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if _, _, err := ModifiedTimes(dir); !errors.Is(err, ErrNoHistory) {
+		t.Fatalf("ModifiedTimes on an empty repository = %v, want ErrNoHistory", err)
+	}
+
+	commitFile(t, dir, "site.gpg", "CIPHER", "Save site")
+	if err := writeRel(dir, "loose.gpg", "CIPHER"); err != nil {
+		t.Fatalf("writeRel: %v", err)
+	}
+	if err := Remove(dir, "site.gpg"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := Commit(dir, "Remove site", "Tester", "tester@example.com"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	times, _, err := ModifiedTimes(dir)
+	if err != nil {
+		t.Fatalf("ModifiedTimes: %v", err)
+	}
+	if _, ok := times["site.gpg"]; ok {
+		t.Fatal("a path deleted at HEAD was reported as present")
+	}
+	if _, ok := times["loose.gpg"]; ok {
+		t.Fatal("a working-tree-only path was reported as present")
 	}
 }

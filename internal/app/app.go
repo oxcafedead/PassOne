@@ -45,6 +45,14 @@ type App struct {
 
 	lockHandlers   []func()
 	unlockHandlers []func()
+
+	// gitTimes caches the newest-commit time of every path in one store, keyed by
+	// the store root and its head commit. Showing an entry's date then costs a map
+	// lookup instead of a walk of the whole history, and the cache is rebuilt only
+	// when the branch has actually moved.
+	gitTimes     map[string]time.Time
+	gitTimesHead string
+	gitTimesRoot string
 }
 
 // ErrLocked is returned when an operation needs unlocked key material.
@@ -859,11 +867,20 @@ func (a *App) HasTOTP(name string) (bool, error) {
 	return false, err
 }
 
-// UpdatedAt reports when the named entry was last written to the store. It
-// decrypts nothing and needs no unlocked session: the answer is the encrypted
-// file's own modification time, which is also the only timestamp the pass
-// format keeps — there is no header to carry one and no sidecar to maintain.
-// An entry that does not exist is an error rather than the zero time.
+// UpdatedAt reports when the named entry was last changed. It decrypts nothing
+// and needs no unlocked session.
+//
+// The date is taken from the store's git history: the author time of the newest
+// commit that touches the entry. That is the real record of the change, and it
+// survives a clone, a pull or a checkout, all of which rewrite every file with
+// the time they ran — a working-tree timestamp would report when the file landed
+// on this machine, not when the entry was edited. The pass format keeps no
+// timestamp inside the file, so the commit is the only place the answer lives.
+//
+// A store that is not a git repository, or an entry that has not been committed
+// yet, has no such record; there the encrypted file's own modification time is
+// the honest fallback. An entry that does not exist is an error rather than the
+// zero time.
 func (a *App) UpdatedAt(name string) (time.Time, error) {
 	if err := a.ensureStoreOpen(); err != nil {
 		return time.Time{}, err
@@ -872,7 +889,50 @@ func (a *App) UpdatedAt(name string) (time.Time, error) {
 	if st == nil {
 		return time.Time{}, errors.New("no password store is open; use 'open' or 'clone' first")
 	}
-	return st.ModTime(name)
+	mtime, err := st.ModTime(name)
+	if err != nil {
+		return time.Time{}, err
+	}
+	rel := strings.ReplaceAll(name, "\\", "/") + ".gpg"
+	if t, ok := a.gitModifiedAt(st.Root(), rel); ok {
+		return t, nil
+	}
+	return mtime, nil
+}
+
+// gitModifiedAt returns the author time of the newest commit touching rel under
+// root. A store that is not a repository, an empty repository, or a path no
+// commit touches reports ok=false so the caller falls back to the file's own
+// modification time.
+//
+// The whole store's path->time map is built in one walk and cached under the
+// head commit. The head is the cache key because it is the only thing that can
+// change a commit-derived date; the map is rebuilt on the next call after a save
+// or a pull moves the branch, and answers from memory until then.
+func (a *App) gitModifiedAt(root, rel string) (time.Time, bool) {
+	head, err := gitx.Head(root)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	a.mu.Lock()
+	if a.gitTimesRoot == root && a.gitTimesHead == head {
+		t, ok := a.gitTimes[rel]
+		a.mu.Unlock()
+		return t, ok
+	}
+	a.mu.Unlock()
+
+	times, built, err := gitx.ModifiedTimes(root)
+	if err != nil {
+		return time.Time{}, false
+	}
+	a.mu.Lock()
+	a.gitTimes, a.gitTimesHead, a.gitTimesRoot = times, built, root
+	a.mu.Unlock()
+
+	t, ok := times[rel]
+	return t, ok
 }
 
 // UsernameSource returns the configured login extraction mode
