@@ -27,6 +27,7 @@ func DPAPIProtect(data []byte) ([]byte, error) {
 	if r0 == 0 {
 		return nil, e1
 	}
+	out.owned = true // CryptProtectData allocated pbData with LocalAlloc
 	result := make([]byte, len(out.toBytes()))
 	copy(result, out.toBytes())
 	out.free()
@@ -52,6 +53,7 @@ func DPAPIUnprotect(data []byte) ([]byte, error) {
 	if r0 == 0 {
 		return nil, e1
 	}
+	out.owned = true // CryptUnprotectData allocated pbData with LocalAlloc
 	result := make([]byte, len(out.toBytes()))
 	copy(result, out.toBytes())
 	out.free()
@@ -69,10 +71,15 @@ var (
 	procCryptUnprotectData = crypt32.NewProc("CryptUnprotectData")
 )
 
-// dataBlob mirrors the Windows DATA_BLOB structure.
+// dataBlob mirrors the Windows DATA_BLOB structure. owned marks a blob whose
+// pbData was allocated by CryptProtectData or CryptUnprotectData (via
+// LocalAlloc) and so may be passed to LocalFree; it is set by those two calls
+// and left false by emptyBlob and bytesToBlob, whose pointers live in Go-managed
+// memory and must never be freed.
 type dataBlob struct {
 	cbData uint32
 	pbData *byte
+	owned  bool
 }
 
 func emptyBlob() *dataBlob {
@@ -94,9 +101,13 @@ func (d *dataBlob) toBytes() []byte {
 }
 
 func (d *dataBlob) free() {
-	if d != nil && d.pbData != nil {
-		// CryptProtectData/CryptUnprotectData allocate the output blob with
-		// LocalAlloc, so it must be released with LocalFree (kernel32).
-		_, _ = windows.LocalFree(windows.Handle(unsafe.Pointer(d.pbData)))
+	if d == nil || !d.owned || d.pbData == nil {
+		return
 	}
+	// CryptProtectData/CryptUnprotectData allocate the output blob with
+	// LocalAlloc, so it must be released with LocalFree (kernel32). The owned
+	// gate is what makes this safe to call on any blob: LocalFree on a pointer
+	// that LocalAlloc never returned corrupts the heap, so a blob that was built
+	// from Go memory must fall through here.
+	_, _ = windows.LocalFree(windows.Handle(unsafe.Pointer(d.pbData)))
 }

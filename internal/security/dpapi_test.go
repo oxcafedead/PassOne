@@ -68,14 +68,16 @@ func TestDPAPIProtectRejectsEmptyInput(t *testing.T) {
 
 // TestDataBlobFreeIgnoresUnallocatedBlobs: the DPAPI calls are the only ones that
 // hand back a LocalAlloc'd pointer, so free() has to be a no-op for anything
-// else. LocalFree on Go-managed memory would corrupt the heap, and this is the
-// only place that can catch a caller passing the wrong blob.
+// else. LocalFree on Go-managed memory corrupts the heap — this test used to
+// make that call and crashed the whole package with status 0xc0000374 instead
+// of failing.
 func TestDataBlobFreeIgnoresUnallocatedBlobs(t *testing.T) {
 	emptyBlob().free()
 	var nilBlob *dataBlob
 	nilBlob.free()
-	// A blob whose cbData is zero but whose pointer is Go-managed: bytesToBlob
-	// never produces this, but free() must not act on the pointer alone.
+	// A blob free() does not own: bytesToBlob points into Go-managed memory and
+	// leaves owned false, so free() must fall through without touching it, no
+	// matter how tempting the non-nil pointer looks.
 	goOwned := bytesToBlob([]byte("short-lived"))
 	goOwned.free()
 	if string(goOwned.toBytes()) != "short-lived" {
