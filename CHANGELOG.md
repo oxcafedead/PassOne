@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one, or vanish for a moment, when switching entries quickly: the per-entry
   probe wrote its answer after the selection had already moved on. It now drops
   an answer that arrives for an entry that is no longer selected.
+- The test suite self-destructed on Windows: a DPAPI test passed a pointer into
+  Go-managed memory to `LocalFree`, which corrupted the heap and aborted
+  `go test ./...` with status `0xc0000374`. `dataBlob.free` now frees only the
+  blobs `CryptProtectData`/`CryptUnprotectData` actually allocated, and the test
+  asserts everything else is left alone.
 
 ### Internal
 
