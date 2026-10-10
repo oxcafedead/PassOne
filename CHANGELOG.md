@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-10-10
+
+### Added
+
+- **Show an entry's last-updated date in the detail pane (GH #46).** The date is
+  read from the store's git history — the author time of the newest commit that
+  touched the entry — so it answers "when was this changed" rather than "when did
+  this file land on this machine", which is all a clone, pull or checkout leaves
+  behind. It sits at the bottom of the detail pane. A store that is not a git
+  repository, or an entry that has not been committed yet, falls back to the
+  encrypted file's own modification time.
+
+### Changed
+
+- Reading that date no longer walks the history once per entry. The whole store's
+  path-to-time map is built in a single walk and cached against the branch head,
+  so selecting entries is a lookup and the walk is paid only when the branch
+  actually moves (a save or a pull). On a store of a thousand commits the old
+  per-selection walk cost about a second each; now the first date costs one walk
+  and every one after it is immediate.
+- Sync merges divergent local and remote histories automatically when no file
+  conflicts, instead of failing as a conflict.
+
+### Fixed
+
+- The last-updated date could belong to the entry selected before the current
+  one, or vanish for a moment, when switching entries quickly: the per-entry
+  probe wrote its answer after the selection had already moved on. It now drops
+  an answer that arrives for an entry that is no longer selected.
+
+### Internal
+
+- `gocognit` now gates cognitive complexity in the linter at the SonarQube
+  `go:S3776` threshold, so a function that crosses the limit fails the build
+  instead of only appearing on the dashboard.
+- The SonarCloud scan classifies the frontend test harness as tests and excludes
+  it from coverage, correcting a count that had read the harness as uncovered
+  product code.
+- `tools/checkui` and the bridge-contract test gained cases for the paths nothing
+  else exercised.
+
 ## [v0.2.0] - 2026-10-02
 
 ### Added
